@@ -1,21 +1,14 @@
-import { useState, useRef, useEffect } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  Play,
-  Plus,
-  MoreVertical,
-  Trash2,
-  RotateCw,
-  Download,
-  Code,
-  X,
-} from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { toast } from "sonner";
+import { Button } from "./ui/button";
+import { Plus, Play, Square, Code, Trash2, RotateCw, Download, MoreVertical, X } from "lucide-react";
 import { ComponentLibrary } from "./ComponentLibrary";
 import { CodeEditor } from "./CodeEditor";
+import { DebugConsole, DebugLog } from "./DebugConsole";
+import { getUltrasonicEngine } from "../simulation/UltrasonicEngine";
 import { UniversalComponent } from "./components/UniversalComponent";
 import { PlacedComponent } from "@/types/components";
 import { COMPONENT_DATA } from "@/config/componentsData";
-import { toast } from "sonner";
 
 interface Wire {
   id: string;
@@ -25,6 +18,8 @@ interface Wire {
   endY: number;
   startPinId: string;
   endPinId: string;
+  waypoints?: { x: number; y: number }[]; // Optional waypoints for manual routing
+  color?: string; // Wire color for visual distinction
 }
 
 // Pin Connection Registry - tracks which components are connected to which Arduino pins
@@ -48,6 +43,7 @@ export const SimulationCanvas = () => {
     startY: number;
     startPinId: string;
     componentInstanceId: string;
+    waypoints: { x: number; y: number }[]; // Track waypoints while drawing
   } | null>(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 });
   const [draggingComponent, setDraggingComponent] = useState<string | null>(
@@ -73,6 +69,13 @@ export const SimulationCanvas = () => {
   const [blinkInterval, setBlinkInterval] = useState<number | null>(null);
   const [forceUpdate, setForceUpdate] = useState(0); // Force component re-render
   const [isCodeUploaded, setIsCodeUploaded] = useState(false); // Track if code is compiled and uploaded
+
+  // Debug Console state
+  const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
+  const [consoleExpanded, setConsoleExpanded] = useState(false);
+  const [consoleHeight, setConsoleHeight] = useState(200);
+
+  // Pin connection tracking
   const [currentBlinkState, setCurrentBlinkState] = useState<
     Record<string, boolean>
   >({});
@@ -253,33 +256,22 @@ export const SimulationCanvas = () => {
 
       if (arduinoPins.length === 0) return;
 
-      // PRIORITY: Choose signal pin over power/ground
-      // Signal pins: D0-D13 (0-13) and A0-A5
-      // Power/Ground: GND, 5V, 3.3V, VIN
-      const signalPin = arduinoPins.find(pin => {
-        // Check if it's a digital pin (0-13)
-        const num = parseInt(pin);
-        if (!isNaN(num) && num >= 0 && num <= 13) return true;
-        // Check if it's an analog pin (A0-A5)
-        if (pin.match(/^A[0-5]$/)) return true;
-        return false;
+      // Register ALL pins for multi-pin components (like HC-SR04)
+      // This allows backend to know TRIG, ECHO, VCC, and GND pins
+      arduinoPins.forEach(pin => {
+        const connection: PinConnection = {
+          componentId: component.instanceId,
+          componentName: component.name,
+          arduinoPin: pin,
+          wireId: componentWires.find(w =>
+            w.startPinId.includes(pin) || w.endPinId.includes(pin)
+          )?.id || componentWires[0].id,
+        };
+
+        connections.push(connection);
       });
 
-      // Use signal pin if found, otherwise use first pin
-      const selectedPin = signalPin || arduinoPins[0];
-
-      console.log(`📌 ${component.name}:`);
-      console.log(`   All connected pins: ${arduinoPins.join(", ")}`);
-      console.log(`   Selected pin: ${selectedPin} ${signalPin ? "(signal)" : "(power/ground)"}`);
-
-      const connection: PinConnection = {
-        componentId: component.instanceId,
-        componentName: component.name,
-        arduinoPin: selectedPin,
-        wireId: componentWires[0].id,
-      };
-
-      connections.push(connection);
+      console.log(`📌 ${component.name}: ${arduinoPins.length} connections (${arduinoPins.join(", ")})`);
     });
 
     setPinConnections(connections);
@@ -455,6 +447,140 @@ export const SimulationCanvas = () => {
     };
   };
 
+  // NEW: Get wire endpoints dynamically based on current component positions
+  const getWireEndpoints = (wire: Wire): { startX: number; startY: number; endX: number; endY: number } | null => {
+    // Wire pin IDs are formatted as: {instanceId}-{pinId}
+    // Example: "arduino-uno-1234567890-d7" where instanceId="arduino-uno-1234567890" and pinId="d7"
+
+    // Find the components by checking if wire pin ID starts with component instance ID
+    const startComp = placedComponents.find((c) => wire.startPinId.startsWith(c.instanceId + '-'));
+    const endComp = placedComponents.find((c) => wire.endPinId.startsWith(c.instanceId + '-'));
+
+    if (!startComp || !endComp) {
+      console.warn('Wire component not found:', { wireId: wire.id, startPinId: wire.startPinId, endPinId: wire.endPinId });
+      return null;
+    }
+
+    // Extract pin IDs by removing the instance ID prefix
+    const startPinId = wire.startPinId.substring(startComp.instanceId.length + 1);
+    const endPinId = wire.endPinId.substring(endComp.instanceId.length + 1);
+
+    // Get current pin positions
+    const startPos = getAbsolutePinPosition(startComp, startPinId);
+    const endPos = getAbsolutePinPosition(endComp, endPinId);
+
+    if (!startPos || !endPos) {
+      console.warn('Pin position not found:', { startPinId, endPinId });
+      return null;
+    }
+
+    return {
+      startX: startPos.x,
+      startY: startPos.y,
+      endX: endPos.x,
+      endY: endPos.y,
+    };
+  };
+
+  // NEW: Create orthogonal wire path (with right-angle corners like Wokwi)
+  const createOrthogonalPath = (x1: number, y1: number, x2: number, y2: number): string => {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+
+    // ========================================================================
+    // ROUTING STYLE OPTIONS - Choose the one you prefer!
+    // ========================================================================
+
+    // OPTION 1: Auto-smart routing (CURRENT - RECOMMENDED)
+    // Routes in direction with larger distance first for cleaner paths
+    if (Math.abs(dx) > Math.abs(dy)) {
+      const midX = x1 + dx / 2;
+      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+    } else {
+      const midY = y1 + dy / 2;
+      return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+    }
+
+    /* OPTION 2: Always horizontal-first routing (like traditional breadboards)
+    // Uncomment this and comment out OPTION 1 to use
+    const midX = x1 + dx / 2;
+    return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
+    */
+
+    /* OPTION 3: Always vertical-first routing
+    // Uncomment this and comment out OPTION 1 to use  
+    const midY = y1 + dy / 2;
+    return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
+    */
+
+    /* OPTION 4: Straight diagonal lines (original simple style)
+    // Uncomment this and comment out OPTION 1 to use
+    return `M ${x1} ${y1} L ${x2} ${y2}`;
+    */
+  };
+
+  // NEW: Create wire path through waypoints (for manual routing)
+  const createWaypointPath = (wire: Wire): string => {
+    const endpoints = getWireEndpoints(wire);
+    if (!endpoints) return '';
+
+    // Start from the start pin
+    let path = `M ${endpoints.startX} ${endpoints.startY}`;
+
+    // If wire has waypoints, draw through them
+    if (wire.waypoints && wire.waypoints.length > 0) {
+      for (const waypoint of wire.waypoints) {
+        path += ` L ${waypoint.x} ${waypoint.y}`;
+      }
+    } else {
+      // Fallback: Use old auto-routing for wires without waypoints
+      const dx = endpoints.endX - endpoints.startX;
+      const dy = endpoints.endY - endpoints.startY;
+
+      if (Math.abs(dx) > Math.abs(dy)) {
+        const midX = endpoints.startX + dx / 2;
+        path += ` L ${midX} ${endpoints.startY} L ${midX} ${endpoints.endY}`;
+      } else {
+        const midY = endpoints.startY + dy / 2;
+        path += ` L ${endpoints.startX} ${midY} L ${endpoints.endX} ${midY}`;
+      }
+    }
+
+    // End at the end pin
+    path += ` L ${endpoints.endX} ${endpoints.endY}`;
+
+    return path;
+  };
+
+  // Create preview path for wire being drawn (MANUAL ROUTING WITH WAYPOINTS)  
+  const createPreviewPath = (): string => {
+    if (!drawingWire) return '';
+
+    let path = `M ${drawingWire.startX} ${drawingWire.startY}`;
+
+    // Draw through all existing waypoints
+    for (const waypoint of drawingWire.waypoints) {
+      path += ` L ${waypoint.x} ${waypoint.y}`;
+    }
+
+    // Preview next segment to cursor
+    const lastPoint = drawingWire.waypoints.length > 0
+      ? drawingWire.waypoints[drawingWire.waypoints.length - 1]
+      : { x: drawingWire.startX, y: drawingWire.startY };
+
+    const dx = Math.abs(mousePos.x - lastPoint.x);
+    const dy = Math.abs(mousePos.y - lastPoint.y);
+
+    // Show where waypoint will be added
+    if (dx > dy) {
+      path += ` L ${mousePos.x} ${lastPoint.y} L ${mousePos.x} ${mousePos.y}`;
+    } else {
+      path += ` L ${lastPoint.x} ${mousePos.y} L ${mousePos.x} ${mousePos.y}`;
+    }
+
+    return path;
+  };
+
   // Handle pin click for wiring
   const handlePinClick = (
     component: PlacedComponent,
@@ -472,6 +598,7 @@ export const SimulationCanvas = () => {
         startY: absolutePos.y,
         startPinId: `${component.instanceId}-${pinId}`,
         componentInstanceId: component.instanceId,
+        waypoints: [], // Start with no waypoints
       });
       toast.info(`Wire started from ${component.name} - ${pinId}`);
     } else {
@@ -504,6 +631,8 @@ export const SimulationCanvas = () => {
         endY: absolutePos.y,
         startPinId: drawingWire.startPinId,
         endPinId: `${component.instanceId}-${pinId}`,
+        waypoints: drawingWire.waypoints, // Store waypoints
+        // color: '#4CAF50', // All wires are green
       };
       setWires([...wires, newWire]);
       setDrawingWire(null);
@@ -521,12 +650,50 @@ export const SimulationCanvas = () => {
     }
   };
 
-  // Cancel wire drawing when clicking on canvas
+  // Add waypoint when clicking on canvas (MANUAL ROUTING)
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (drawingWire && e.target === e.currentTarget) {
-      setDrawingWire(null);
-      toast.info("Wire drawing cancelled");
+      if (canvasRef.current) {
+        const rect = canvasRef.current.getBoundingClientRect();
+        const clickX = e.clientX - rect.left;
+        const clickY = e.clientY - rect.top;
+
+        // Add waypoint at clicked position (constrained to orthogonal)
+        const lastPoint = drawingWire.waypoints.length > 0
+          ? drawingWire.waypoints[drawingWire.waypoints.length - 1]
+          : { x: drawingWire.startX, y: drawingWire.startY };
+
+        const dx = Math.abs(clickX - lastPoint.x);
+        const dy = Math.abs(clickY - lastPoint.y);
+
+        // Add corner waypoint
+        let cornerWaypoint: { x: number; y: number };
+        if (dx > dy) {
+          cornerWaypoint = { x: clickX, y: lastPoint.y };
+        } else {
+          cornerWaypoint = { x: lastPoint.x, y: clickY };
+        }
+
+        setDrawingWire({
+          ...drawingWire,
+          waypoints: [...drawingWire.waypoints, cornerWaypoint],
+        });
+
+        toast.success(`Corner ${drawingWire.waypoints.length + 1} added - Click more corners or click target pin to finish`);
+      }
     }
+  };
+
+  // Add debug log to console
+  const addDebugLog = (type: DebugLog['type'], message: string, value?: number) => {
+    const log: DebugLog = {
+      id: `log-${Date.now()}-${Math.random()}`,
+      timestamp: Date.now(),
+      type,
+      message,
+      value
+    };
+    setDebugLogs(prev => [...prev, log]);
   };
 
   // Remove a specific component
@@ -620,9 +787,31 @@ export const SimulationCanvas = () => {
 
   // Update circuit state based on connections
   const updateCircuitState = () => {
-    if (!isSimulating) return;
-
     console.log("Updating circuit state based on connections");
+
+    // Detect HC-SR04 Ultrasonic Sensors and simulate readings
+    const ultrasonicSensors = placedComponents.filter(c =>
+      c.id.toLowerCase().includes('hc-sr04') ||
+      c.id.toLowerCase().includes('ultrasonic')
+    );
+
+    if (ultrasonicSensors.length > 0) {
+      const ultrasonicEngine = getUltrasonicEngine();
+
+      ultrasonicSensors.forEach(sensor => {
+        // Simulate realistic distance with variation (10-50cm range)
+        const baseDistance = 20 + Math.random() * 30; // 20-50cm
+        const noise = (Math.random() - 0.5) * 5; // ±2.5cm noise
+        const distance = Math.max(5, Math.min(200, baseDistance + noise));
+
+        // Update engine distance
+        ultrasonicEngine.setDistance(sensor.instanceId, distance);
+
+        // Log to debug console
+        console.log(`🔵 Logging distance: ${distance.toFixed(2)} cm`);  // DEBUG
+        addDebugLog('sensor', 'HC-SR04 Distance', distance);
+      });
+    }
 
     // Find Arduino component
     const arduino = placedComponents.find((c) => c.id.includes("arduino"));
@@ -733,11 +922,32 @@ export const SimulationCanvas = () => {
       // Just check if there's any code at all
       if (!isCodeUploaded) {
         toast.error("⚠️ Please write and compile some code first!");
+        addDebugLog('error', 'Cannot start simulation - no code uploaded');
         return;
       }
 
       setIsSimulating(true);
       toast.success("🚀 Simulation started!");
+      addDebugLog('info', 'Simulation started');
+
+      // Initialize ultrasonic engine
+      const ultrasonicEngine = getUltrasonicEngine();
+
+      // Register HC-SR04 sensors
+      const sensors = placedComponents.filter(c =>
+        c.id.toLowerCase().includes('hc-sr04') ||
+        c.id.toLowerCase().includes('ultrasonic')
+      );
+
+      if (sensors.length > 0) {
+        sensors.forEach(sensor => {
+          // For now, use default pins (will be improved with actual wire detection)
+          // TRIG = pin 9, ECHO = pin 3 (from your code)
+          ultrasonicEngine.registerSensor(sensor.instanceId, 9, 3);
+          ultrasonicEngine.setDistance(sensor.instanceId, 20); // Start at 20cm
+          addDebugLog('info', `HC-SR04 sensor registered (TRIG=9, ECHO=3)`);
+        });
+      }
 
       // Update circuit state immediately
       updateCircuitState();
@@ -755,6 +965,9 @@ export const SimulationCanvas = () => {
 
       // REAL-TIME BLINKING SYSTEM - Uses actual Arduino delay() values
       const interval = setInterval(() => {
+        // Update circuit state and sensor readings every cycle
+        updateCircuitState();
+
         if (compiledCode.hasBlinking) {
           const newBlinkState: Record<string, boolean> = {};
 
@@ -808,6 +1021,7 @@ export const SimulationCanvas = () => {
       // Stop simulation
       setIsSimulating(false);
       toast.info("⏸️ Simulation stopped");
+      addDebugLog('info', 'Simulation stopped');
 
       // Clear interval and reset blink state
       if (blinkInterval !== null) {
@@ -1986,56 +2200,72 @@ export const SimulationCanvas = () => {
           )}
           {/* Wire SVG Layer */}
           <svg
-            className="absolute inset-0"
-            style={{ width: "100%", height: "100%" }}
+            className="absolute inset-0 pointer-events-none"
+            style={{ width: "100%", height: "100%", zIndex: 1000 }}
           >
             {/* Existing wires - thicker and more visible with hover effect */}
-            {wires.map((wire) => (
-              <g key={wire.id}>
-                <line
-                  x1={wire.startX}
-                  y1={wire.startY}
-                  x2={wire.endX}
-                  y2={wire.endY}
-                  stroke="#4CAF50"
-                  strokeWidth="4"
-                  strokeLinecap="round"
-                  className="cursor-pointer hover:stroke-red-500 transition-colors"
-                  onClick={(e) => {
-                    if (!isSimulating) {
-                      e.stopPropagation();
-                      removeWire(wire.id);
-                    }
-                  }}
-                />
-                {/* Delete button for wire - appears in middle of wire */}
-                {!isSimulating && (
-                  <circle
-                    cx={(wire.startX + wire.endX) / 2}
-                    cy={(wire.startY + wire.endY) / 2}
-                    r="8"
-                    fill="red"
-                    className="cursor-pointer hover:fill-red-600 transition-all opacity-0 hover:opacity-100"
+            {wires.map((wire) => {
+              const endpoints = getWireEndpoints(wire);
+              if (!endpoints) return null; // Skip if components are missing
+
+              return (
+                <g key={wire.id} className="pointer-events-auto">
+                  <path
+                    d={createWaypointPath(wire)}
+                    stroke={wire.color || '#4CAF50'}
+                    strokeWidth="4"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    fill="none"
+                    className="cursor-pointer hover:stroke-red-500 transition-colors"
                     onClick={(e) => {
-                      e.stopPropagation();
-                      removeWire(wire.id);
+                      if (!isSimulating) {
+                        e.stopPropagation();
+                        removeWire(wire.id);
+                      }
                     }}
                   />
-                )}
-              </g>
-            ))}
+                  {/* Waypoint markers */}
+                  {wire.waypoints && wire.waypoints.map((waypoint, idx) => (
+                    <circle
+                      key={`${wire.id}-waypoint-${idx}`}
+                      cx={waypoint.x}
+                      cy={waypoint.y}
+                      r="4"
+                      fill={wire.color || '#4CAF50'}
+                      stroke="white"
+                      strokeWidth="2"
+                      className="cursor-pointer hover:r-6 transition-all"
+                    />
+                  ))}
+                  {/* Delete button for wire - appears in middle of wire */}
+                  {!isSimulating && endpoints && (
+                    <circle
+                      cx={(endpoints.startX + endpoints.endX) / 2}
+                      cy={(endpoints.startY + endpoints.endY) / 2}
+                      r="8"
+                      fill="red"
+                      className="cursor-pointer hover:fill-red-600 transition-all opacity-0 hover:opacity-100"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        removeWire(wire.id);
+                      }}
+                    />
+                  )}
+                </g>
+              );
+            })}
 
-            {/* Wire being drawn */}
+            {/* Wire being drawn - shows waypoints */}
             {drawingWire && (
-              <line
-                x1={drawingWire.startX}
-                y1={drawingWire.startY}
-                x2={mousePos.x}
-                y2={mousePos.y}
+              <path
+                d={createPreviewPath()}
                 stroke="hsl(var(--accent))"
                 strokeWidth="3"
                 strokeLinecap="round"
+                strokeLinejoin="round"
                 strokeDasharray="5,5"
+                fill="none"
                 className="animate-pulse"
               />
             )}
@@ -2085,6 +2315,16 @@ export const SimulationCanvas = () => {
           />
         )}
       </div>
+
+      {/* Debug Console at bottom */}
+      <DebugConsole
+        logs={debugLogs}
+        isExpanded={consoleExpanded}
+        height={consoleHeight}
+        onToggle={() => setConsoleExpanded(!consoleExpanded)}
+        onHeightChange={setConsoleHeight}
+        onClear={() => setDebugLogs([])}
+      />
     </div>
   );
 };
