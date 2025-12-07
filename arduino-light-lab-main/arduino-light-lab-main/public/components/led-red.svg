@@ -1,0 +1,19 @@
+<!-- Simple LED Red - Example Component -->
+<svg width="30" height="50" viewBox="0 0 30 50" xmlns="http://www.w3.org/2000/svg">
+  <!-- LED bulb -->
+  <ellipse cx="15" cy="20" rx="12" ry="15" fill="#EF4444" stroke="#991B1B" stroke-width="2"/>
+  <ellipse cx="15" cy="18" rx="8" ry="10" fill="#FCA5A5" opacity="0.6"/>
+  
+  <!-- Anode (positive) leg -->
+  <line x1="15" y1="5" x2="15" y2="0" stroke="#D97706" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="15" cy="2" r="2" fill="#F59E0B"/>
+  
+  <!-- Cathode (negative) leg -->
+  <line x1="15" y1="35" x2="15" y2="50" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="15" cy="48" r="2" fill="#9CA3AF"/>
+  
+  <!-- Markers -->
+  <text x="18" y="5" fill="#F59E0B" font-size="8" font-weight="bold">+</text>
+  <text x="18" y="47" fill="#6B7280" font-size="8" font-weight="bold">-</text>
+</svg>
+

@@ -1,0 +1,23 @@
+<!-- Green LED -->
+<svg width="30" height="50" viewBox="0 0 30 50" xmlns="http://www.w3.org/2000/svg">
+  <!-- LED bulb -->
+  <ellipse cx="15" cy="20" rx="12" ry="15" fill="#10B981" stroke="#059669" stroke-width="2"/>
+  <ellipse cx="15" cy="18" rx="8" ry="10" fill="#6EE7B7" opacity="0.6"/>
+  
+  <!-- Highlight -->
+  <ellipse cx="12" cy="16" rx="4" ry="6" fill="white" opacity="0.4"/>
+  
+  <!-- Anode (positive) leg - longer -->
+  <line x1="15" y1="5" x2="15" y2="0" stroke="#F59E0B" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="15" cy="2" r="2" fill="#F59E0B"/>
+  
+  <!-- Cathode (negative) leg - shorter with flat side indicator -->
+  <line x1="15" y1="35" x2="15" y2="50" stroke="#6B7280" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="15" cy="48" r="2" fill="#9CA3AF"/>
+  <path d="M 10 33 L 10 28" stroke="#059669" stroke-width="2"/>
+  
+  <!-- Markers -->
+  <text x="18" y="5" fill="#F59E0B" font-size="8" font-weight="bold">+</text>
+  <text x="18" y="47" fill="#6B7280" font-size="8" font-weight="bold">-</text>
+</svg>
+

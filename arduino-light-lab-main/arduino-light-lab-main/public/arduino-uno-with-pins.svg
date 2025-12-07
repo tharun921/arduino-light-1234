@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 1000 750" width="1000" height="750">
+  <!-- Embedded PNG as background -->
+  <image href="arduino-uno.png" x="0" y="0" width="1000" height="750" />
+  
+  <!-- Pin markers for Digital Pins (Top Right) -->
+  <!-- Digital pins 0-13, arranged horizontally -->
+  <g id="digital-pins" opacity="0.7">
+    <circle cx="920" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="0" />
+    <circle cx="895" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="1" />
+    <circle cx="870" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="2" />
+    <circle cx="845" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="3" />
+    <circle cx="820" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="4" />
+    <circle cx="795" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="5" />
+    <circle cx="770" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="6" />
+    <circle cx="745" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="7" />
+    <circle cx="705" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="8" />
+    <circle cx="680" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="9" />
+    <circle cx="655" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="10" />
+    <circle cx="630" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="11" />
+    <circle cx="605" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="12" />
+    <circle cx="580" cy="85" r="8" fill="red" stroke="white" stroke-width="2" data-pin="13" />
+  </g>
+  
+  <!-- Pin markers for Analog Pins (Bottom Right) -->
+  <!-- Analog pins A0-A5, arranged horizontally -->
+  <g id="analog-pins" opacity="0.7">
+    <circle cx="920" cy="665" r="8" fill="blue" stroke="white" stroke-width="2" data-pin="A5" />
+    <circle cx="895" cy="665" r="8" fill="blue" stroke="white" stroke-width="2" data-pin="A4" />
+    <circle cx="870" cy="665" r="8" fill="blue" stroke="white" stroke-width="2" data-pin="A3" />
+    <circle cx="845" cy="665" r="8" fill="blue" stroke="white" stroke-width="2" data-pin="A2" />
+    <circle cx="820" cy="665" r="8" fill="blue" stroke="white" stroke-width="2" data-pin="A1" />
+    <circle cx="795" cy="665" r="8" fill="blue" stroke="white" stroke-width="2" data-pin="A0" />
+  </g>
+  
+  <!-- Pin markers for Power Pins (Bottom Left) -->
+  <g id="power-pins" opacity="0.7">
+    <circle cx="505" cy="665" r="8" fill="green" stroke="white" stroke-width="2" data-pin="IOREF" />
+    <circle cx="530" cy="665" r="8" fill="green" stroke="white" stroke-width="2" data-pin="RESET" />
+    <circle cx="555" cy="665" r="8" fill="green" stroke="white" stroke-width="2" data-pin="3V3" />
+    <circle cx="580" cy="665" r="8" fill="green" stroke="white" stroke-width="2" data-pin="5V" />
+    <circle cx="605" cy="665" r="8" fill="green" stroke="white" stroke-width="2" data-pin="GND1" />
+    <circle cx="630" cy="665" r="8" fill="green" stroke="white" stroke-width="2" data-pin="GND2" />
+    <circle cx="655" cy="665" r="8" fill="green" stroke="white" stroke-width="2" data-pin="VIN" />
+  </g>
+  
+  <!-- Labels (optional, can be toggled) -->
+  <g id="labels" font-family="Arial, sans-serif" font-size="12" fill="white" opacity="0">
+    <!-- Digital pin labels -->
+    <text x="920" y="70" text-anchor="middle">0</text>
+    <text x="895" y="70" text-anchor="middle">1</text>
+    <text x="870" y="70" text-anchor="middle">2</text>
+    <text x="845" y="70" text-anchor="middle">3</text>
+    <text x="820" y="70" text-anchor="middle">4</text>
+    <text x="795" y="70" text-anchor="middle">5</text>
+    <text x="770" y="70" text-anchor="middle">6</text>
+    <text x="745" y="70" text-anchor="middle">7</text>
+    <text x="705" y="70" text-anchor="middle">8</text>
+    <text x="680" y="70" text-anchor="middle">9</text>
+    <text x="655" y="70" text-anchor="middle">10</text>
+    <text x="630" y="70" text-anchor="middle">11</text>
+    <text x="605" y="70" text-anchor="middle">12</text>
+    <text x="580" y="70" text-anchor="middle">13</text>
+  </g>
+</svg>

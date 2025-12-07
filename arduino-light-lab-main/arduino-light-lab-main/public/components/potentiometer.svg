@@ -1,0 +1,36 @@
+<!-- Potentiometer 10K -->
+<svg width="50" height="60" viewBox="0 0 50 60" xmlns="http://www.w3.org/2000/svg">
+  <!-- Base body -->
+  <rect x="12" y="15" width="26" height="30" rx="2" fill="#3B82F6" stroke="#1E40AF" stroke-width="1.5"/>
+  
+  <!-- Adjustment screw slot -->
+  <circle cx="25" cy="30" r="10" fill="#FCD34D" stroke="#D97706" stroke-width="1"/>
+  <circle cx="25" cy="30" r="7" fill="#F59E0B"/>
+  
+  <!-- Screw slot -->
+  <line x1="25" y1="23" x2="25" y2="37" stroke="#92400E" stroke-width="2"/>
+  
+  <!-- Position indicator line -->
+  <line x1="25" y1="30" x2="31" y2="30" stroke="#78350F" stroke-width="1.5" stroke-linecap="round"/>
+  
+  <!-- Shaft/knob -->
+  <rect x="22" y="8" width="6" height="10" rx="1" fill="#A3A3A3" stroke="#71717A" stroke-width="0.5"/>
+  
+  <!-- Pins -->
+  <rect x="15" y="50" width="3" height="8" rx="0.5" fill="#F59E0B"/>
+  <rect x="23.5" y="50" width="3" height="8" rx="0.5" fill="#10B981"/>
+  <rect x="32" y="50" width="3" height="8" rx="0.5" fill="#6B7280"/>
+  
+  <!-- Pin labels -->
+  <text x="16.5" y="48" text-anchor="middle" fill="white" font-size="4" font-weight="bold">VCC</text>
+  <text x="25" y="48" text-anchor="middle" fill="white" font-size="4" font-weight="bold">OUT</text>
+  <text x="33.5" y="48" text-anchor="middle" fill="white" font-size="4" font-weight="bold">GND</text>
+  
+  <!-- Value label -->
+  <text x="25" y="42" text-anchor="middle" fill="white" font-size="4" font-weight="bold">10K</text>
+  
+  <!-- Rotation marks -->
+  <text x="8" y="32" fill="white" font-size="5">0</text>
+  <text x="40" y="32" fill="white" font-size="5">10</text>
+</svg>
+

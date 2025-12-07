@@ -1,0 +1,37 @@
+<!-- 
+  EXAMPLE SVG TEMPLATE
+  Use this as a starting point for creating component images
+  
+  Guidelines:
+  - Set viewBox to match component dimensions
+  - Use clear, bold colors
+  - Make pins/connectors visible
+  - Keep it simple and recognizable
+-->
+
+<svg width="60" height="80" viewBox="0 0 60 80" xmlns="http://www.w3.org/2000/svg">
+  <!-- Component body -->
+  <rect x="5" y="10" width="50" height="60" rx="3" fill="#3B82F6" stroke="#1E40AF" stroke-width="2"/>
+  
+  <!-- Component label -->
+  <text x="30" y="35" text-anchor="middle" fill="white" font-size="10" font-weight="bold" font-family="Arial">
+    DHT11
+  </text>
+  
+  <!-- Pin 1 - VCC (top) -->
+  <rect x="10" y="5" width="8" height="8" rx="1" fill="#FCD34D" stroke="#F59E0B" stroke-width="1"/>
+  <text x="14" y="11" text-anchor="middle" fill="#78350F" font-size="6" font-weight="bold">+</text>
+  
+  <!-- Pin 2 - Data (middle) -->
+  <rect x="10" y="36" width="8" height="8" rx="1" fill="#34D399" stroke="#10B981" stroke-width="1"/>
+  <text x="14" y="42" text-anchor="middle" fill="#064E3B" font-size="6" font-weight="bold">D</text>
+  
+  <!-- Pin 3 - GND (bottom) -->
+  <rect x="10" y="67" width="8" height="8" rx="1" fill="#6B7280" stroke="#374151" stroke-width="1"/>
+  <text x="14" y="73" text-anchor="middle" fill="white" font-size="6" font-weight="bold">-</text>
+  
+  <!-- Sensor symbol/icon (optional decorative element) -->
+  <circle cx="40" y="45" r="8" fill="none" stroke="white" stroke-width="2" opacity="0.5"/>
+  <circle cx="40" y="45" r="4" fill="white" opacity="0.5"/>
+</svg>
+

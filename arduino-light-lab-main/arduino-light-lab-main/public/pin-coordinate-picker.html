@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Universal Component Pin Coordinate Picker</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #fff;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        h1 {
+            color: #00bcd4;
+            margin-bottom: 10px;
+        }
+
+        .instructions {
+            background: #2a2a2a;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid #00bcd4;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr 450px;
+            gap: 20px;
+        }
+
+        .image-container {
+            border: 2px solid #444;
+            border-radius: 8px;
+            overflow: hidden;
+            background: #2a2a2a;
+            position: relative;
+            min-height: 400px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #componentImage {
+            max-width: 100%;
+            max-height: 100%;
+            cursor: crosshair;
+            background: white;
+        }
+
+        .placeholder {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        .coordinates-panel {
+            background: #2a2a2a;
+            border-radius: 8px;
+            padding: 20px;
+            overflow-y: auto;
+            max-height: 800px;
+        }
+
+        .pin-input-group {
+            margin-bottom: 15px;
+            padding: 10px;
+            background: #333;
+            border-radius: 5px;
+        }
+
+        .pin-input-group label {
+            display: inline-block;
+            color: #00bcd4;
+            font-weight: bold;
+            margin-bottom: 5px;
+            margin-right: 5px;
+        }
+
+        .pin-input-group input,
+        .pin-input-group select {
+            padding: 5px;
+            margin-right: 10px;
+            margin-bottom: 5px;
+            background: #444;
+            border: 1px solid #666;
+            color: #fff;
+            border-radius: 3px;
+        }
+
+        .coordinates-list {
+            margin-top: 20px;
+        }
+
+        .coordinate-item {
+            background: #333;
+            padding: 8px 12px;
+            margin-bottom: 5px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .coordinate-item:hover {
+            background: #404040;
+        }
+
+        button {
+            background: #00bcd4;
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            margin: 5px;
+        }
+
+        button:hover {
+            background: #00acc1;
+        }
+
+        .delete-btn {
+            background: #f44336;
+            padding: 5px 10px;
+            font-size: 12px;
+        }
+
+        .delete-btn:hover {
+            background: #d32f2f;
+        }
+
+        .output-code {
+            background: #1e1e1e;
+            padding: 15px;
+            border-radius: 5px;
+            margin-top: 10px;
+            overflow-x: auto;
+        }
+
+        .output-code pre {
+            margin: 0;
+            color: #d4d4d4;
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+        }
+
+        .current-pin {
+            color: #4caf50;
+            font-weight: bold;
+        }
+
+        .marker {
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            background: rgba(76, 175, 80, 0.7);
+            border: 2px solid #fff;
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.8);
+        }
+
+        .scale-info {
+            margin-top: 10px;
+            padding: 8px;
+            background: #444;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🎯 Universal Component Pin Coordinate Picker</h1>
+
+        <div class="instructions">
+            <strong>Instructions:</strong><br>
+            1. Upload a component image OR select from available components<br>
+            2. Set your desired Target Width & Height for the component display<br>
+            3. Enter Pin ID and click on the component image where each pin is located<br>
+            4. Coordinates will be automatically scaled to your target dimensions<br>
+            5. Copy the generated TypeScript code to update your componentsData.ts
+        </div>
+
+        <div class="main-content">
+            <div class="image-container" id="imageContainer">
+                <div class="placeholder" id="placeholder">
+                    <p style="font-size: 18px; margin-bottom: 20px;">📤 Upload a component image or select from dropdown
+                    </p>
+                    <input type="file" id="imageUpload" accept="image/*" style="display: none;">
+                    <button onclick="document.getElementById('imageUpload').click()">
+                        Choose Image File
+                    </button>
+                </div>
+                <img id="componentImage" alt="Component" style="display: none;">
+            </div>
+
+            <div class="coordinates-panel">
+                <h3>Current Pin: <span id="currentPin" class="current-pin">-</span></h3>
+
+                <!-- Component Selection -->
+                <div class="pin-input-group">
+                    <strong style="display: block; margin-bottom: 8px; color: #00bcd4;">Quick Select Component:</strong>
+                    <select id="componentSelect" style="width: 100%; padding: 8px;">
+                        <option value="">-- Choose or upload image --</option>
+                        <option value="/arduino-uno.png">Arduino UNO</option>
+                        <option value="/components/dht11.svg">DHT11 Sensor</option>
+                        <option value="/components/hc-sr04.svg">HC-SR04 Ultrasonic</option>
+                        <option value="/components/led-red.svg">LED Red</option>
+                        <option value="/components/servo-sg90.svg">Servo SG90</option>
+                        <option value="/components/lcd-16x2.svg">LCD 16x2</option>
+                        <option value="/components/buzzer.svg">Buzzer</option>
+                    </select>
+                </div>
+
+                <!-- Target Dimensions -->
+                <div class="pin-input-group">
+                    <strong style="display: block; margin-bottom: 8px; color: #00bcd4;">Target Dimensions:</strong>
+                    <label for="targetWidth">Width:</label>
+                    <input type="number" id="targetWidth" placeholder="60" value="60" style="width: 80px;">
+                    <label for="targetHeight">Height:</label>
+                    <input type="number" id="targetHeight" placeholder="80" value="80" style="width: 80px;">
+                    <div class="scale-info">
+                        <strong>Original Image:</strong> <span id="origDimensions">-</span><br>
+                        <strong>Scale Factor:</strong> <span id="scaleFactor">-</span>
+                    </div>
+                </div>
+
+                <!-- Pin Input -->
+                <div class="pin-input-group">
+                    <strong style="display: block; margin-bottom: 8px; color: #00bcd4;">Pin Details:</strong>
+                    <label for="pinId">ID:</label>
+                    <input type="text" id="pinId" placeholder="vcc" autofocus style="width: 60px;">
+                    <label for="pinLabel">Label:</label>
+                    <input type="text" id="pinLabel" placeholder="VCC" style="width: 60px;"><br>
+                    <label for="pinType">Type:</label>
+                    <select id="pinType" style="width: 100px;">
+                        <option value="power">power</option>
+                        <option value="digital">digital</option>
+                        <option value="analog">analog</option>
+                        <option value="ground">ground</option>
+                        <option value="data">data</option>
+                    </select>
+                </div>
+
+                <div id="coordinatesList" class="coordinates-list"></div>
+
+                <div style="margin-top: 20px;">
+                    <button onclick="clearAll()">Clear All</button>
+                    <button onclick="generateCode()">Generate Code</button>
+                </div>
+
+                <div class="output-code" id="outputCode" style="display: none;">
+                    <pre id="codeOutput"></pre>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let coordinates = [];
+        let imageScale = 1;
+        let originalWidth = 0;
+        let originalHeight = 0;
+
+        const componentImage = document.getElementById('componentImage');
+        const imageContainer = document.getElementById('imageContainer');
+        const placeholder = document.getElementById('placeholder');
+        const pinIdInput = document.getElementById('pinId');
+        const pinLabelInput = document.getElementById('pinLabel');
+        const pinTypeSelect = document.getElementById('pinType');
+        const targetWidthInput = document.getElementById('targetWidth');
+        const targetHeightInput = document.getElementById('targetHeight');
+        const componentSelect = document.getElementById('componentSelect');
+        const imageUpload = document.getElementById('imageUpload');
+
+        // Component selection
+        componentSelect.addEventListener('change', function () {
+            if (this.value) {
+                loadImage(this.value);
+            }
+        });
+
+        // Image upload
+        imageUpload.addEventListener('change', function (e) {
+            const file = e.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function (event) {
+                    loadImage(event.target.result);
+                };
+                reader.readAsDataURL(file);
+            }
+        });
+
+        function loadImage(src) {
+            componentImage.src = src;
+            componentImage.style.display = 'block';
+            placeholder.style.display = 'none';
+        }
+
+        // Image loaded
+        componentImage.onload = function () {
+            originalWidth = this.naturalWidth;
+            originalHeight = this.naturalHeight;
+            document.getElementById('origDimensions').textContent = `${originalWidth} × ${originalHeight}px`;
+            updateScaleInfo();
+            console.log(`Original dimensions: ${originalWidth}x${originalHeight}`);
+        };
+
+        // Update scale info
+        targetWidthInput.addEventListener('input', updateScaleInfo);
+        targetHeightInput.addEventListener('input', updateScaleInfo);
+
+        function updateScaleInfo() {
+            if (!originalWidth || !originalHeight) return;
+
+            const targetW = parseInt(targetWidthInput.value) || 60;
+            const targetH = parseInt(targetHeightInput.value) || 80;
+
+            const scaleX = targetW / originalWidth;
+            const scaleY = targetH / originalHeight;
+
+            document.getElementById('scaleFactor').textContent =
+                `${scaleX.toFixed(3)} × ${scaleY.toFixed(3)}`;
+        }
+
+        componentImage.addEventListener('click', function (e) {
+            const pinId = pinIdInput.value.trim();
+            const pinLabel = pinLabelInput.value.trim() || pinId.toUpperCase();
+            const pinType = pinTypeSelect.value;
+
+            if (!pinId) {
+                alert('Please enter a Pin ID first!');
+                pinIdInput.focus();
+                return;
+            }
+
+            const rect = this.getBoundingClientRect();
+            const displayX = e.clientX - rect.left;
+            const displayY = e.clientY - rect.top;
+
+            // Calculate scale
+            imageScale = this.naturalWidth / rect.width;
+
+            // Convert to original image coordinates
+            const originalX = displayX * imageScale;
+            const originalY = displayY * imageScale;
+
+            // Get target dimensions
+            const targetW = parseInt(targetWidthInput.value) || 60;
+            const targetH = parseInt(targetHeightInput.value) || 80;
+
+            // Calculate scaled coordinates
+            const targetScaleX = targetW / originalWidth;
+            const targetScaleY = targetH / originalHeight;
+
+            const targetX = Math.round(originalX * targetScaleX);
+            const targetY = Math.round(originalY * targetScaleY);
+
+            // Add coordinate
+            coordinates.push({
+                id: pinId,
+                label: pinLabel,
+                x: targetX,
+                y: targetY,
+                type: pinType
+            });
+
+            // Add marker
+            const marker = document.createElement('div');
+            marker.className = 'marker';
+            marker.style.left = (rect.left - imageContainer.getBoundingClientRect().left + displayX) + 'px';
+            marker.style.top = (rect.top - imageContainer.getBoundingClientRect().top + displayY) + 'px';
+            marker.title = `${pinLabel} (${targetX}, ${targetY})`;
+            imageContainer.appendChild(marker);
+
+            updateCoordinatesList();
+
+            // Clear and focus
+            pinLabelInput.value = '';
+            pinIdInput.value = '';
+            pinIdInput.focus();
+        });
+
+        function updateCoordinatesList() {
+            const list = document.getElementById('coordinatesList');
+            const currentPin = document.getElementById('currentPin');
+
+            currentPin.textContent = coordinates.length > 0 ?
+                coordinates[coordinates.length - 1].label : '-';
+
+            list.innerHTML = coordinates.map((coord, index) => `
+        <div class="coordinate-item">
+          <span>${coord.label} (${coord.type}): { x: ${coord.x}, y: ${coord.y} }</span>
+          <button class="delete-btn" onclick="deleteCoordinate(${index})">Delete</button>
+        </div>
+      `).join('');
+        }
+
+        function deleteCoordinate(index) {
+            coordinates.splice(index, 1);
+            const markers = imageContainer.querySelectorAll('.marker');
+            if (markers[index]) markers[index].remove();
+            updateCoordinatesList();
+        }
+
+        function clearAll() {
+            if (confirm('Clear all coordinates?')) {
+                coordinates = [];
+                imageContainer.querySelectorAll('.marker').forEach(m => m.remove());
+                updateCoordinatesList();
+                document.getElementById('outputCode').style.display = 'none';
+            }
+        }
+
+        function generateCode() {
+            const targetW = parseInt(targetWidthInput.value) || 60;
+            const targetH = parseInt(targetHeightInput.value) || 80;
+
+            const pinsCode = coordinates.map(coord =>
+                `      { id: "${coord.id}", label: "${coord.label}", x: ${coord.x}, y: ${coord.y}, type: "${coord.type}" }`
+            ).join(',\n');
+
+            const fullCode = `pins: [\n${pinsCode}\n    ],\n    width: ${targetW},\n    height: ${targetH},`;
+
+            document.getElementById('codeOutput').textContent = fullCode;
+            document.getElementById('outputCode').style.display = 'block';
+
+            navigator.clipboard.writeText(fullCode).then(() => {
+                alert('Code copied to clipboard! ✓\n\nPaste this into componentsData.ts for your component.');
+            });
+        }
+
+        // Keyboard shortcuts
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && (e.target === pinIdInput || e.target === pinLabelInput)) {
+                e.preventDefault();
+                document.getElementById('currentPin').textContent = 'Click on the image!';
+            }
+        });
+    </script>
+</body>
+
+</html>

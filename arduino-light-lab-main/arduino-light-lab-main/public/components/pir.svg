@@ -1,0 +1,45 @@
+<!-- PIR Motion Sensor -->
+<svg width="70" height="70" viewBox="0 0 70 70" xmlns="http://www.w3.org/2000/svg">
+  <!-- PCB Base -->
+  <rect x="10" y="35" width="50" height="30" rx="2" fill="#3B82F6" stroke="#1E40AF" stroke-width="1.5"/>
+  
+  <!-- PIR Dome (Fresnel lens) -->
+  <ellipse cx="35" cy="28" rx="22" ry="20" fill="white" opacity="0.9" stroke="#E5E5E7" stroke-width="1.5"/>
+  <ellipse cx="35" cy="28" rx="18" ry="16" fill="#F5F5F5" opacity="0.8"/>
+  
+  <!-- Fresnel lens pattern -->
+  <g opacity="0.3">
+    <circle cx="35" cy="28" r="15" fill="none" stroke="#A3A3A3" stroke-width="0.5"/>
+    <circle cx="35" cy="28" r="12" fill="none" stroke="#A3A3A3" stroke-width="0.5"/>
+    <circle cx="35" cy="28" r="9" fill="none" stroke="#A3A3A3" stroke-width="0.5"/>
+    <circle cx="35" cy="28" r="6" fill="none" stroke="#A3A3A3" stroke-width="0.5"/>
+    <circle cx="35" cy="28" r="3" fill="none" stroke="#A3A3A3" stroke-width="0.5"/>
+  </g>
+  
+  <!-- Adjustment potentiometers -->
+  <rect x="15" y="40" width="8" height="8" rx="1" fill="#F59E0B" stroke="#D97706" stroke-width="0.5"/>
+  <circle cx="19" cy="44" r="2" fill="#FCD34D"/>
+  <line x1="19" y1="42" x2="20.5" y2="43.5" stroke="#92400E" stroke-width="1"/>
+  
+  <rect x="47" y="40" width="8" height="8" rx="1" fill="#F59E0B" stroke="#D97706" stroke-width="0.5"/>
+  <circle cx="51" cy="44" r="2" fill="#FCD34D"/>
+  <line x1="51" y1="42" x2="52.5" y2="43.5" stroke="#92400E" stroke-width="1"/>
+  
+  <!-- Labels for adjustments -->
+  <text x="19" y="38" text-anchor="middle" fill="white" font-size="4" font-weight="bold">TIME</text>
+  <text x="51" y="38" text-anchor="middle" fill="white" font-size="4" font-weight="bold">SENS</text>
+  
+  <!-- Pins -->
+  <rect x="28" y="60" width="3" height="8" rx="0.5" fill="#6B7280"/>
+  <rect x="33.5" y="60" width="3" height="8" rx="0.5" fill="#DC2626"/>
+  <rect x="39" y="60" width="3" height="8" rx="0.5" fill="#F59E0B"/>
+  
+  <!-- Pin labels -->
+  <text x="29.5" y="58" text-anchor="middle" fill="white" font-size="4" font-weight="bold">GND</text>
+  <text x="35" y="58" text-anchor="middle" fill="white" font-size="4" font-weight="bold">VCC</text>
+  <text x="40.5" y="58" text-anchor="middle" fill="white" font-size="4" font-weight="bold">OUT</text>
+  
+  <!-- Label -->
+  <text x="35" y="62" text-anchor="middle" fill="white" font-size="5" font-weight="bold">HC-SR501</text>
+</svg>
+

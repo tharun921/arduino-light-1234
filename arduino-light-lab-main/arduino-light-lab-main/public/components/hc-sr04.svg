@@ -1,0 +1,36 @@
+<!-- HC-SR04 Ultrasonic Sensor -->
+<svg width="80" height="60" viewBox="0 0 80 60" xmlns="http://www.w3.org/2000/svg">
+  <!-- PCB Board -->
+  <rect x="5" y="10" width="70" height="35" rx="2" fill="#10B981" stroke="#059669" stroke-width="1.5"/>
+  
+  <!-- Ultrasonic Transducers (the "eyes") -->
+  <circle cx="25" cy="27.5" r="12" fill="#D4D4D8" stroke="#71717A" stroke-width="1.5"/>
+  <circle cx="25" cy="27.5" r="8" fill="#52525B"/>
+  <circle cx="25" cy="27.5" r="5" fill="#18181B"/>
+  
+  <circle cx="55" cy="27.5" r="12" fill="#D4D4D8" stroke="#71717A" stroke-width="1.5"/>
+  <circle cx="55" cy="27.5" r="8" fill="#52525B"/>
+  <circle cx="55" cy="27.5" r="5" fill="#18181B"/>
+  
+  <!-- Crystal Oscillator -->
+  <rect x="35" y="15" width="10" height="10" rx="1" fill="#D4D4D8" stroke="#71717A" stroke-width="0.5"/>
+  
+  <!-- Label -->
+  <text x="40" y="40" text-anchor="middle" fill="white" font-size="6" font-weight="bold">HC-SR04</text>
+  
+  <!-- Pin Headers -->
+  <rect x="15" y="45" width="50" height="6" fill="#18181B" stroke="#71717A" stroke-width="0.5"/>
+  
+  <!-- Pins -->
+  <rect x="18" y="48" width="3" height="8" rx="0.5" fill="#F59E0B"/>
+  <rect x="30" y="48" width="3" height="8" rx="0.5" fill="#10B981"/>
+  <rect x="42" y="48" width="3" height="8" rx="0.5" fill="#3B82F6"/>
+  <rect x="54" y="48" width="3" height="8" rx="0.5" fill="#6B7280"/>
+  
+  <!-- Pin labels -->
+  <text x="19.5" y="46" text-anchor="middle" fill="white" font-size="4" font-weight="bold">VCC</text>
+  <text x="31.5" y="46" text-anchor="middle" fill="white" font-size="4" font-weight="bold">TRIG</text>
+  <text x="43.5" y="46" text-anchor="middle" fill="white" font-size="4" font-weight="bold">ECHO</text>
+  <text x="55.5" y="46" text-anchor="middle" fill="white" font-size="4" font-weight="bold">GND</text>
+</svg>
+

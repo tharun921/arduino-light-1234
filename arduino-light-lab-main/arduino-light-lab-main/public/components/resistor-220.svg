@@ -1,0 +1,22 @@
+<!-- Resistor 220Ω -->
+<svg width="80" height="30" viewBox="0 0 80 30" xmlns="http://www.w3.org/2000/svg">
+  <!-- Left wire -->
+  <line x1="0" y1="15" x2="20" y2="15" stroke="#9CA3AF" stroke-width="2"/>
+  
+  <!-- Resistor body -->
+  <rect x="20" y="8" width="40" height="14" rx="2" fill="#F3E8D8" stroke="#8B7355" stroke-width="1.5"/>
+  
+  <!-- Color bands (Red-Red-Brown-Gold for 220Ω) -->
+  <rect x="25" y="8" width="4" height="14" fill="#EF4444"/>  <!-- Red -->
+  <rect x="33" y="8" width="4" height="14" fill="#EF4444"/>  <!-- Red -->
+  <rect x="41" y="8" width="4" height="14" fill="#92400E"/>  <!-- Brown -->
+  <rect x="52" y="8" width="4" height="14" fill="#F59E0B"/>  <!-- Gold -->
+  
+  <!-- Right wire -->
+  <line x1="60" y1="15" x2="80" y2="15" stroke="#9CA3AF" stroke-width="2"/>
+  
+  <!-- Connection points -->
+  <circle cx="0" cy="15" r="2" fill="#6B7280"/>
+  <circle cx="80" cy="15" r="2" fill="#6B7280"/>
+</svg>
+
