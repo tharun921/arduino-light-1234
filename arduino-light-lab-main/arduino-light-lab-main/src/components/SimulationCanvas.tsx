@@ -482,74 +482,184 @@ export const SimulationCanvas = () => {
     };
   };
 
-  // NEW: Create orthogonal wire path (with right-angle corners like Wokwi)
-  const createOrthogonalPath = (x1: number, y1: number, x2: number, y2: number): string => {
-    const dx = x2 - x1;
-    const dy = y2 - y1;
 
-    // ========================================================================
-    // ROUTING STYLE OPTIONS - Choose the one you prefer!
-    // ========================================================================
+  // ============================================================================
+  // TRUE WOKWI ROUTING - Manhattan with straight lines + stroke-linejoin rounding
+  // ============================================================================
 
-    // OPTION 1: Auto-smart routing (CURRENT - RECOMMENDED)
-    // Routes in direction with larger distance first for cleaner paths
-    if (Math.abs(dx) > Math.abs(dy)) {
-      const midX = x1 + dx / 2;
-      return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
-    } else {
-      const midY = y1 + dy / 2;
-      return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
-    }
+  // Constants for TRUE Wokwi-style routing
+  const PIN_EXIT_DISTANCE = 10;      // Straight exit from pin (10px)
+  const GRID_SIZE = 5;                // Grid snap size (5px)
+  const WIRE_LANE_OFFSET = 10;       // Parallel wire spacing (10px per lane)
 
-    /* OPTION 2: Always horizontal-first routing (like traditional breadboards)
-    // Uncomment this and comment out OPTION 1 to use
-    const midX = x1 + dx / 2;
-    return `M ${x1} ${y1} L ${midX} ${y1} L ${midX} ${y2} L ${x2} ${y2}`;
-    */
-
-    /* OPTION 3: Always vertical-first routing
-    // Uncomment this and comment out OPTION 1 to use  
-    const midY = y1 + dy / 2;
-    return `M ${x1} ${y1} L ${x1} ${midY} L ${x2} ${midY} L ${x2} ${y2}`;
-    */
-
-    /* OPTION 4: Straight diagonal lines (original simple style)
-    // Uncomment this and comment out OPTION 1 to use
-    return `M ${x1} ${y1} L ${x2} ${y2}`;
-    */
+  // Helper: Snap coordinate to grid
+  const snapToGrid = (value: number): number => {
+    return Math.round(value / GRID_SIZE) * GRID_SIZE;
   };
 
-  // NEW: Create wire path through waypoints (for manual routing)
-  const createWaypointPath = (wire: Wire): string => {
+  // Helper: Get direction vector for pin exit
+  const getExitVector = (direction: string): { dx: number; dy: number } => {
+    switch (direction) {
+      case 'top': return { dx: 0, dy: -1 };
+      case 'bottom': return { dx: 0, dy: 1 };
+      case 'left': return { dx: -1, dy: 0 };
+      case 'right': return { dx: 1, dy: 0 };
+      default: return { dx: 0, dy: 1 }; // Default down
+    }
+  };
+
+  // NEW: Create TRUE Wokwi-style Manhattan path (STRAIGHT LINES ONLY)
+  const createManhattanPath = (wire: Wire): string => {
     const endpoints = getWireEndpoints(wire);
     if (!endpoints) return '';
 
-    // Start from the start pin
-    let path = `M ${endpoints.startX} ${endpoints.startY}`;
+    // Get pin information with directions
+    const startPin = getPinWithDirection(wire.startPinId);
+    const endPin = getPinWithDirection(wire.endPinId);
 
-    // If wire has waypoints, draw through them
-    if (wire.waypoints && wire.waypoints.length > 0) {
-      for (const waypoint of wire.waypoints) {
-        path += ` L ${waypoint.x} ${waypoint.y}`;
-      }
-    } else {
-      // Fallback: Use old auto-routing for wires without waypoints
-      const dx = endpoints.endX - endpoints.startX;
-      const dy = endpoints.endY - endpoints.startY;
+    if (!startPin || !endPin) {
+      // Fallback to straight line
+      return `M ${endpoints.startX} ${endpoints.startY} L ${endpoints.endX} ${endpoints.endY}`;
+    }
 
-      if (Math.abs(dx) > Math.abs(dy)) {
-        const midX = endpoints.startX + dx / 2;
-        path += ` L ${midX} ${endpoints.startY} L ${midX} ${endpoints.endY}`;
+    // Grid-snap pin coordinates (CRITICAL for straight wires)
+    const p0 = {
+      x: snapToGrid(startPin.x),
+      y: snapToGrid(startPin.y)
+    };
+
+    const p3 = {
+      x: snapToGrid(endPin.x),
+      y: snapToGrid(endPin.y)
+    };
+
+    // Calculate exit and entry points (straight out from pins)
+    const startVector = getExitVector(startPin.direction);
+    const endVector = getExitVector(endPin.direction);
+
+    const p1 = {
+      x: snapToGrid(p0.x + startVector.dx * PIN_EXIT_DISTANCE),
+      y: snapToGrid(p0.y + startVector.dy * PIN_EXIT_DISTANCE)
+    };
+
+    const p2 = {
+      x: snapToGrid(p3.x + endVector.dx * PIN_EXIT_DISTANCE),
+      y: snapToGrid(p3.y + endVector.dy * PIN_EXIT_DISTANCE)
+    };
+
+    // Build pure Manhattan path (STRAIGHT LINES ONLY - NO BEZIER)
+    let path = `M ${p0.x} ${p0.y}`;
+
+    // Exit straight from start pin
+    path += ` L ${p1.x} ${p1.y}`;
+
+    // Manhattan bridge between exit and entry
+    const segments = calculateManhattanSegments(p1, p2, startPin.direction, endPin.direction);
+    for (const segment of segments) {
+      path += ` L ${snapToGrid(segment.x)} ${snapToGrid(segment.y)}`;
+    }
+
+    // Entry straight to end pin
+    path += ` L ${p2.x} ${p2.y}`;
+    path += ` L ${p3.x} ${p3.y}`;
+
+    return path;
+  };
+
+  // Helper: Calculate Manhattan segments (horizontal then vertical, or vice versa)
+  const calculateManhattanSegments = (
+    start: { x: number; y: number },
+    end: { x: number; y: number },
+    startDir: string,
+    endDir: string
+  ): Array<{ x: number; y: number }> => {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+
+    // Determine routing strategy based on pin directions
+    const startHorizontal = startDir === 'left' || startDir === 'right';
+    const endHorizontal = endDir === 'left' || endDir === 'right';
+
+    // If both pins face horizontally or both vertically, use standard Manhattan
+    if (startHorizontal === endHorizontal) {
+      // Use whichever distance is larger
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        // Horizontal first
+        const midX = start.x + dx / 2;
+        return [
+          { x: midX, y: start.y },
+          { x: midX, y: end.y }
+        ];
       } else {
-        const midY = endpoints.startY + dy / 2;
-        path += ` L ${endpoints.startX} ${midY} L ${endpoints.endX} ${midY}`;
+        // Vertical first
+        const midY = start.y + dy / 2;
+        return [
+          { x: start.x, y: midY },
+          { x: end.x, y: midY }
+        ];
       }
     }
 
-    // End at the end pin
-    path += ` L ${endpoints.endX} ${endpoints.endY}`;
+    // Mixed directions - route based on start pin direction
+    if (startHorizontal) {
+      // Start horizontal, then vertical
+      return [
+        { x: end.x, y: start.y }
+      ];
+    } else {
+      // Start vertical, then horizontal
+      return [
+        { x: start.x, y: end.y }
+      ];
+    }
+  };
 
-    return path;
+  // Helper: Get pin coordinates with direction from pinId
+  const getPinWithDirection = (pinId: string): { x: number; y: number; direction: string } | null => {
+    // Parse pinId: "arduino-uno-1234567-d9" or "hc-sr04-1234567-trig"
+    const parts = pinId.split('-');
+    const pinName = parts[parts.length - 1]; // "d9" or "trig"
+    const componentInstanceId = parts.slice(0, -1).join('-'); // "arduino-uno-1234567"
+
+    // Find component in placedComponents
+    const component = placedComponents.find(c => c.instanceId === componentInstanceId);
+    if (!component) return null;
+
+    // Find pin definition
+    const pin = component.pins?.find(p => p.id === pinName);
+    if (!pin) return null;
+
+    // Return absolute coordinates with direction
+    return {
+      x: component.x + pin.x,
+      y: component.y + pin.y,
+      direction: pin.direction || 'right' // Default to 'right' if not specified
+    };
+  };
+
+  // Helper: Get wire color based on pin type
+  const getWireColorByPinType = (pinId: string): string | null => {
+    const pin = pinId.toLowerCase();
+
+    // Power pins - RED
+    if (pin.includes('vcc') || pin.includes('5v') || pin.includes('power') || pin.includes('3v3') || pin.includes('vin')) {
+      return '#FF0000';
+    }
+
+    // Ground pins - BLACK
+    if (pin.includes('gnd') || pin.includes('ground')) {
+      return '#000000';
+    }
+
+    // Signal pins - COLORED
+    if (pin.includes('trig')) return '#00FF00'; // GREEN
+    if (pin.includes('echo')) return '#0000FF'; // BLUE
+    if (pin.includes('data')) return '#FFA500'; // ORANGE
+    if (pin.includes('rx')) return '#9C27B0'; // PURPLE
+    if (pin.includes('tx')) return '#FF9800'; // ORANGE
+
+    // Default signal - Return null to use wire's default color
+    return null;
   };
 
   // Create preview path for wire being drawn (MANUAL ROUTING WITH WAYPOINTS)  
@@ -2203,7 +2313,7 @@ export const SimulationCanvas = () => {
             className="absolute inset-0 pointer-events-none"
             style={{ width: "100%", height: "100%", zIndex: 1000 }}
           >
-            {/* Existing wires - thicker and more visible with hover effect */}
+            {/* Existing wires - TRUE Wokwi style (straight lines + stroke-linejoin rounding) */}
             {wires.map((wire) => {
               const endpoints = getWireEndpoints(wire);
               if (!endpoints) return null; // Skip if components are missing
@@ -2211,13 +2321,13 @@ export const SimulationCanvas = () => {
               return (
                 <g key={wire.id} className="pointer-events-auto">
                   <path
-                    d={createWaypointPath(wire)}
-                    stroke={wire.color || '#4CAF50'}
-                    strokeWidth="4"
+                    d={createManhattanPath(wire)}
+                    stroke="#00c853"    // Vivid green color
+                    strokeWidth="3"
                     strokeLinecap="round"
                     strokeLinejoin="round"
                     fill="none"
-                    className="cursor-pointer hover:stroke-red-500 transition-colors"
+                    className="cursor-pointer hover:stroke-red-500 transition-all duration-200"
                     onClick={(e) => {
                       if (!isSimulating) {
                         e.stopPropagation();
@@ -2225,20 +2335,8 @@ export const SimulationCanvas = () => {
                       }
                     }}
                   />
-                  {/* Waypoint markers */}
-                  {wire.waypoints && wire.waypoints.map((waypoint, idx) => (
-                    <circle
-                      key={`${wire.id}-waypoint-${idx}`}
-                      cx={waypoint.x}
-                      cy={waypoint.y}
-                      r="4"
-                      fill={wire.color || '#4CAF50'}
-                      stroke="white"
-                      strokeWidth="2"
-                      className="cursor-pointer hover:r-6 transition-all"
-                    />
-                  ))}
-                  {/* Delete button for wire - appears in middle of wire */}
+
+                  {/* Delete button for wire (only when not simulating) */}
                   {!isSimulating && endpoints && (
                     <circle
                       cx={(endpoints.startX + endpoints.endX) / 2}

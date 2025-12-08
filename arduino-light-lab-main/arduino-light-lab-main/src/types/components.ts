@@ -5,18 +5,19 @@ export interface ComponentPin {
   x: number;
   y: number;
   type: "digital" | "analog" | "power" | "ground" | "data";
+  direction?: "left" | "right" | "top" | "bottom"; // Pin direction for wire routing
 }
 
 export interface ComponentConfig {
   id: string;
   name: string;
   category:
-    | "sensors"
-    | "displays"
-    | "actuators"
-    | "communication"
-    | "basic"
-    | "boards";
+  | "sensors"
+  | "displays"
+  | "actuators"
+  | "communication"
+  | "basic"
+  | "boards";
   description: string;
   pins: ComponentPin[];
   width: number;
