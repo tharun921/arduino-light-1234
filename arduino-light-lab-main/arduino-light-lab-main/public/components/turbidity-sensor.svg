@@ -1,0 +1,41 @@
+<svg width="70" height="80" viewBox="0 0 70 80" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Main Module PCB Board -->
+  <rect x="5" y="15" width="60" height="60" rx="3" fill="#2E7D32" stroke="#1B5E20" stroke-width="1"/>
+  
+  <!-- Probe connector area at top -->
+  <rect x="20" y="5" width="30" height="12" rx="2" fill="#424242" stroke="#212121" stroke-width="1"/>
+  <text x="35" y="13" font-family="monospace" font-size="6" fill="#FFD700" text-anchor="middle">PROBE</text>
+  
+  <!-- Probe wires (3 wires going into connector) -->
+  <line x1="28" y1="5" x2="28" y2="0" stroke="#FF0000" stroke-width="1.5"/>
+  <line x1="35" y1="5" x2="35" y2="0" stroke="#000000" stroke-width="1.5"/>
+  <line x1="42" y1="5" x2="42" y2="0" stroke="#0000FF" stroke-width="1.5"/>
+  
+  <!-- Sensor processing chip -->
+  <rect x="20" y="25" width="30" height="20" rx="1" fill="#1A237E" stroke="#0D47A1" stroke-width="1"/>
+  <text x="35" y="37" font-family="Arial" font-size="6" fill="white" text-anchor="middle" font-weight="bold">TSD</text>
+  
+  <!-- LED indicators -->
+  <circle cx="15" cy="30" r="3" fill="#00FF00" opacity="0.7"/>
+  <circle cx="15" cy="40" r="3" fill="#FF0000" opacity="0.7"/>
+  
+  <!-- Potentiometer (threshold adjust) -->
+  <circle cx="55" cy="35" r="5" fill="#4682B4" stroke="#1E90FF" stroke-width="1"/>
+  <line x1="55" y1="35" x2="58" y2="32" stroke="white" stroke-width="1"/>
+  
+  <!-- Pin labels on left -->
+  <text x="3" y="10" font-family="monospace" font-size="6" fill="white">VCC</text>
+  <text x="3" y="25" font-family="monospace" font-size="6" fill="white">GND</text>
+  <text x="3" y="40" font-family="monospace" font-size="6" fill="white">DO</text>
+  <text x="3" y="55" font-family="monospace" font-size="6" fill="white">AO</text>
+  
+  <!-- Pin connectors (4 Arduino connections) -->
+  <rect x="0" y="7" width="4" height="3" fill="#FFD700"/>
+  <rect x="0" y="22" width="4" height="3" fill="#FFD700"/>
+  <rect x="0" y="37" width="4" height="3" fill="#FFD700"/>
+  <rect x="0" y="52" width="4" height="3" fill="#FFD700"/>
+  
+  <!-- Component label -->
+  <text x="35" y="70" font-family="Arial" font-size="7" fill="white" text-anchor="middle" font-weight="bold">TURBIDITY</text>
+  <text x="35" y="77" font-family="Arial" font-size="5" fill="white" text-anchor="middle">MODULE</text>
+</svg>

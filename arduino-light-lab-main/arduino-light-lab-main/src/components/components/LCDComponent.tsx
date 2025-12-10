@@ -4,9 +4,16 @@ interface LCDComponentProps {
     x: number;
     y: number;
     rotation?: number;
+    lcdText?: {
+        line1: string;
+        line2: string;
+    };
 }
 
-const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0 }) => {
+const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0, lcdText }) => {
+    const line1 = lcdText?.line1 || '';
+    const line2 = lcdText?.line2 || '';
+
     return (
         <g transform={`translate(${x}, ${y}) rotate(${rotation})`}>
             {/* LCD 16x2 Display - 180x80px */}
@@ -45,6 +52,33 @@ const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0 }) => {
                 opacity="0.7"
                 rx="1"
             />
+
+            {/* LCD Text Display */}
+            {/* Line 1 */}
+            <text
+                x="20"
+                y="32"
+                fontSize="11"
+                fill="#000000"
+                fontFamily="monospace"
+                fontWeight="bold"
+                letterSpacing="1"
+            >
+                {line1}
+            </text>
+
+            {/* Line 2 */}
+            <text
+                x="20"
+                y="47"
+                fontSize="11"
+                fill="#000000"
+                fontFamily="monospace"
+                fontWeight="bold"
+                letterSpacing="1"
+            >
+                {line2}
+            </text>
 
             {/* Mounting holes */}
             <circle cx="8" cy="8" r="3" fill="#1a5f1f" />

@@ -6,9 +6,13 @@ import { ComponentLibrary } from "./ComponentLibrary";
 import { CodeEditor } from "./CodeEditor";
 import { DebugConsole, DebugLog } from "./DebugConsole";
 import { getUltrasonicEngine } from "../simulation/UltrasonicEngine";
+import { getLCDEngine } from "../simulation/LCDEngine";
+import { simulateLCDFromCode } from "../simulation/LCDHardwareSimulator";
 import { UniversalComponent } from "./components/UniversalComponent";
 import { PlacedComponent } from "@/types/components";
 import { COMPONENT_DATA } from "@/config/componentsData";
+import { saveProject, getAllProjects, loadProject, deleteProject, type Project } from "@/utils/projectStorage";
+
 
 interface Wire {
   id: string;
@@ -51,7 +55,7 @@ export const SimulationCanvas = () => {
   );
   const [currentCode, setCurrentCode] = useState<string>("");
   const [compiledCode, setCompiledCode] = useState<{
-    pinStates?: Record<string, boolean>;
+    pinStates?: Record<string, number>;
     pinModes?: Record<string, string>;
     analogValues?: Record<string, number>;
     servoPositions?: Record<string, number>;
@@ -60,6 +64,7 @@ export const SimulationCanvas = () => {
     code?: string;
     timestamp?: number;
     hasLCD?: boolean;
+    lcdText?: { line1: string; line2: string }; // LCD display text
     serialOutput?: string[];
     sensorValues?: Record<string, number>;
     functionTypes?: Record<string, number>;
@@ -81,10 +86,53 @@ export const SimulationCanvas = () => {
   >({});
   const [isDragOver, setIsDragOver] = useState(false); // Track if dragging over canvas
   const [pinConnections, setPinConnections] = useState<PinConnection[]>([]); // NEW: Track pin connections
+  const [showProjectsMenu, setShowProjectsMenu] = useState(false);
+  const [savedProjects, setSavedProjects] = useState<Project[]>([]);
   const canvasRef = useRef<HTMLDivElement>(null);
 
+
   // ═══════════════════════════════════════════════════════════════════
-  // � AUTO-UPDATE PIN CONNECTIONS
+  // 💾 AUTO-SAVE & AUTO-LOAD CIRCUIT (Browser Storage)
+  // ═══════════════════════════════════════════════════════════════════
+
+  // Auto-load circuit from localStorage on startup
+  useEffect(() => {
+    try {
+      const savedCircuit = localStorage.getItem('arduino-circuit');
+      if (savedCircuit) {
+        const circuit = JSON.parse(savedCircuit);
+        if (circuit.components) setPlacedComponents(circuit.components);
+        if (circuit.wires) setWires(circuit.wires);
+        if (circuit.code) setCurrentCode(circuit.code);
+        console.log('✅ Circuit loaded from browser storage');
+        toast.success('Circuit restored from last session');
+      }
+    } catch (error) {
+      console.error('Failed to load saved circuit:', error);
+    }
+  }, []); // Run only once on mount
+
+  // Auto-save circuit to localStorage whenever it changes
+  useEffect(() => {
+    // Skip saving if nothing is placed yet
+    if (placedComponents.length === 0 && wires.length === 0) return;
+
+    try {
+      const circuit = {
+        components: placedComponents,
+        wires: wires,
+        code: currentCode,
+        timestamp: Date.now()
+      };
+      localStorage.setItem('arduino-circuit', JSON.stringify(circuit));
+      console.log('💾 Circuit auto-saved to browser storage');
+    } catch (error) {
+      console.error('Failed to save circuit:', error);
+    }
+  }, [placedComponents, wires, currentCode]); // Save when any changes
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 🔄 AUTO-UPDATE PIN CONNECTIONS
   // ═══════════════════════════════════════════════════════════════════
   // Automatically update pin connection registry when wires or components change
   useEffect(() => {
@@ -92,7 +140,7 @@ export const SimulationCanvas = () => {
   }, [wires, placedComponents]); // Re-run when wires or components change
 
   // ═══════════════════════════════════════════════════════════════════
-  // �🔧 UNIVERSAL ARDUINO PIN EXTRACTION HELPER
+  // 🔧 UNIVERSAL ARDUINO PIN EXTRACTION HELPER
   // ═══════════════════════════════════════════════════════════════════
   /**
    * Extracts Arduino pin number from a wire pin ID
@@ -292,6 +340,127 @@ export const SimulationCanvas = () => {
     return connections;
   };
 
+  // ═══════════════════════════════════════════════════════════════════
+  // 📺 LCD ENGINE INTEGRATION
+  // ═══════════════════════════════════════════════════════════════════
+  /**
+   * Registers LCD components with the LCD engine
+   * Maps LCD pins (RS, E, D4-D7) to Arduino pin numbers via wire connections
+   */
+  const registerLCDComponents = () => {
+    console.log("📺 Registering LCD components with engine...");
+
+    const lcdEngine = getLCDEngine();
+    const lcdComponents = placedComponents.filter(c => c.id.includes("lcd"));
+
+    if (lcdComponents.length === 0) {
+      console.log("  No LCD components found");
+      return;
+    }
+
+    lcdComponents.forEach(lcdComponent => {
+      console.log(`📺 Processing ${lcdComponent.name} (${lcdComponent.instanceId})`);
+
+      // Find all wires connected to this LCD
+      const lcdWires = wires.filter(wire =>
+        wire.startPinId.startsWith(lcdComponent.instanceId) ||
+        wire.endPinId.startsWith(lcdComponent.instanceId)
+      );
+
+      if (lcdWires.length === 0) {
+        console.log("  No wires connected to LCD");
+        return;
+      }
+
+      // Map LCD pins to Arduino pins
+      const pinMapping: Record<string, number> = {};
+      let hasGnd = false;
+      let hasVcc = false;
+
+      lcdWires.forEach(wire => {
+        // Determine which end is the LCD
+        const lcdPinId = wire.startPinId.startsWith(lcdComponent.instanceId)
+          ? wire.startPinId
+          : wire.endPinId;
+
+        const arduinoPinId = wire.startPinId.includes("arduino-uno")
+          ? wire.startPinId
+          : wire.endPinId.includes("arduino-uno")
+            ? wire.endPinId
+            : null;
+
+        // Extract LCD pin name (e.g., "rs", "e", "d4", "vss", "vdd")
+        const lcdPinName = lcdPinId.split("-").pop();
+
+        // Check for power pins
+        if (lcdPinName === 'vss') {
+          hasGnd = true;
+          console.log(`  ✓ Found GND connection (VSS)`);
+        }
+        if (lcdPinName === 'vdd') {
+          hasVcc = true;
+          console.log(`  ✓ Found VCC connection (VDD)`);
+        }
+
+        if (!arduinoPinId) return;
+
+        // Extract Arduino pin number
+        const arduinoPinStr = extractArduinoPinNumber(arduinoPinId);
+
+        if (!lcdPinName || !arduinoPinStr) return;
+
+        // Convert Arduino pin string to number (e.g., "7" → 7, "12" → 12)
+        const arduinoPinNum = parseInt(arduinoPinStr, 10);
+
+        if (isNaN(arduinoPinNum)) return;
+
+        pinMapping[lcdPinName] = arduinoPinNum;
+        console.log(`  Mapped LCD ${lcdPinName.toUpperCase()} → Arduino Pin ${arduinoPinNum}`);
+      });
+
+      // ⚡ POWER VALIDATION: Check if LCD has power connections
+      if (!hasGnd || !hasVcc) {
+        const missing = [];
+        if (!hasGnd) missing.push('GND (VSS)');
+        if (!hasVcc) missing.push('5V (VDD)');
+
+        console.error(`\n${'='.repeat(50)}`);
+        console.error(`❌ LCD POWER ERROR: ${lcdComponent.name}`);
+        console.error(`   Missing: ${missing.join(' and ')}`);
+        console.error(`   Real LCDs cannot work without power!`);
+        console.error(`   Please connect both GND and VCC pins.`);
+        console.error('='.repeat(50) + '\n');
+
+        toast.error(`LCD Error: Connect ${missing.join(' and ')} to power the display`, { duration: 5000 });
+        addDebugLog('error', `LCD missing power: ${missing.join(', ')}`);
+        return; // Don't register LCD without power
+      }
+
+      // Check if we have all required pins (RS, E, D4, D5, D6, D7)
+      const requiredPins = ["rs", "e", "d4", "d5", "d6", "d7"];
+      const missingPins = requiredPins.filter(pin => !pinMapping[pin]);
+
+      if (missingPins.length > 0) {
+        console.warn(`  ⚠️ LCD missing pins: ${missingPins.join(", ")}`);
+        console.warn(`  ⚠️ LCD will not be registered until all pins are connected`);
+        return;
+      }
+
+      // Register with LCD engine
+      const lcdPinConfig = {
+        rs: pinMapping.rs,
+        en: pinMapping.e,  // Engine expects "en" not "e"
+        d4: pinMapping.d4,
+        d5: pinMapping.d5,
+        d6: pinMapping.d6,
+        d7: pinMapping.d7,
+      };
+
+      lcdEngine.registerLCD(lcdComponent.instanceId, lcdPinConfig);
+      console.log(`✅ LCD registered with engine:`, lcdPinConfig);
+    });
+  };
+
   // Handle adding a component from the library
   const handleAddComponent = (componentId: string) => {
     const componentConfig = COMPONENT_DATA.find((c) => c.id === componentId);
@@ -365,8 +534,19 @@ export const SimulationCanvas = () => {
       console.error("Error parsing drag offset data:", err);
     }
 
+    // Get old position before update
+    const oldComponent = placedComponents.find(
+      (comp) => comp.instanceId === draggingComponent
+    );
+    const oldX = oldComponent?.x || 0;
+    const oldY = oldComponent?.y || 0;
+
     const newX = Math.max(0, e.clientX - rect.left - offsetData.offsetX);
     const newY = Math.max(0, e.clientY - rect.top - offsetData.offsetY);
+
+    // Calculate movement delta
+    const deltaX = newX - oldX;
+    const deltaY = newY - oldY;
 
     setPlacedComponents((components) =>
       components.map((comp) =>
@@ -375,6 +555,28 @@ export const SimulationCanvas = () => {
           : comp,
       ),
     );
+
+    // Update waypoints to move with the component (preserve wire shape)
+    if (deltaX !== 0 || deltaY !== 0) {
+      setWires((currentWires) =>
+        currentWires.map((wire) => {
+          const isConnected =
+            wire.startPinId.startsWith(draggingComponent + '-') ||
+            wire.endPinId.startsWith(draggingComponent + '-');
+
+          if (isConnected && wire.waypoints && wire.waypoints.length > 0) {
+            // Move waypoints by the same delta to preserve wire shape
+            const updatedWaypoints = wire.waypoints.map(wp => ({
+              x: wp.x + deltaX,
+              y: wp.y + deltaY
+            }));
+
+            return { ...wire, waypoints: updatedWaypoints };
+          }
+          return wire;
+        })
+      );
+    }
 
     setDraggingComponent(null);
 
@@ -662,6 +864,34 @@ export const SimulationCanvas = () => {
     return null;
   };
 
+  // NEW: Get unique color for each wire
+  const getWireColor = (wire: Wire, wireIndex: number): string => {
+    // Try to get color based on pin type first (power/ground)
+    const startPinColor = getWireColorByPinType(wire.startPinId);
+    const endPinColor = getWireColorByPinType(wire.endPinId);
+
+    // If either pin is power or ground, use that color
+    if (startPinColor) return startPinColor;
+    if (endPinColor) return endPinColor;
+
+    // For signal wires, use vibrant color palette for visual distinction
+    const colorPalette = [
+      '#FF6B6B', // Coral Red
+      '#4ECDC4', // Turquoise
+      '#45B7D1', // Sky Blue
+      '#FFA07A', // Light Salmon
+      '#98D8C8', // Mint
+      '#C7CEEA', // Lavender
+      '#B8E994', // Light Green
+      '#F8B500', // Amber
+      '#A29BFE', // Periwinkle
+      '#FD79A8'  // Pink
+    ];
+
+    // Cycle through color palette based on wire index
+    return colorPalette[wireIndex % colorPalette.length];
+  };
+
   // Create preview path for wire being drawn (MANUAL ROUTING WITH WAYPOINTS)  
   const createPreviewPath = (): string => {
     if (!drawingWire) return '';
@@ -673,20 +903,36 @@ export const SimulationCanvas = () => {
       path += ` L ${waypoint.x} ${waypoint.y}`;
     }
 
-    // Preview next segment to cursor
+    // Preview line from last waypoint to current mouse position
     const lastPoint = drawingWire.waypoints.length > 0
       ? drawingWire.waypoints[drawingWire.waypoints.length - 1]
       : { x: drawingWire.startX, y: drawingWire.startY };
 
-    const dx = Math.abs(mousePos.x - lastPoint.x);
-    const dy = Math.abs(mousePos.y - lastPoint.y);
+    // Direct line to mouse - no auto-snapping
+    path += ` L ${mousePos.x} ${mousePos.y}`;
 
-    // Show where waypoint will be added
-    if (dx > dy) {
-      path += ` L ${mousePos.x} ${lastPoint.y} L ${mousePos.x} ${mousePos.y}`;
-    } else {
-      path += ` L ${lastPoint.x} ${mousePos.y} L ${mousePos.x} ${mousePos.y}`;
+    return path;
+  };
+
+  // NEW: Create path from waypoints for completed wires (MANUAL ROUTING)
+  const createWaypointPath = (wire: Wire): string => {
+    const endpoints = getWireEndpoints(wire);
+    if (!endpoints) return '';
+
+    // If no waypoints, draw straight line
+    if (!wire.waypoints || wire.waypoints.length === 0) {
+      return `M ${endpoints.startX} ${endpoints.startY} L ${endpoints.endX} ${endpoints.endY}`;
     }
+
+    // Build path through waypoints
+    let path = `M ${endpoints.startX} ${endpoints.startY}`;
+
+    for (const waypoint of wire.waypoints) {
+      path += ` L ${waypoint.x} ${waypoint.y}`;
+    }
+
+    // Final segment to end point
+    path += ` L ${endpoints.endX} ${endpoints.endY}`;
 
     return path;
   };
@@ -751,6 +997,7 @@ export const SimulationCanvas = () => {
       // Update pin connection registry after state settles
       setTimeout(() => {
         updatePinConnections();
+        registerLCDComponents();  // Register LCDs with engine
       }, 100);
 
       // If simulation is active, update the circuit state
@@ -760,7 +1007,7 @@ export const SimulationCanvas = () => {
     }
   };
 
-  // Add waypoint when clicking on canvas (MANUAL ROUTING)
+  // Add waypoint when clicking on canvas (MANUAL ROUTING - NO AUTO-SNAPPING)
   const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (drawingWire && e.target === e.currentTarget) {
       if (canvasRef.current) {
@@ -768,28 +1015,15 @@ export const SimulationCanvas = () => {
         const clickX = e.clientX - rect.left;
         const clickY = e.clientY - rect.top;
 
-        // Add waypoint at clicked position (constrained to orthogonal)
-        const lastPoint = drawingWire.waypoints.length > 0
-          ? drawingWire.waypoints[drawingWire.waypoints.length - 1]
-          : { x: drawingWire.startX, y: drawingWire.startY };
-
-        const dx = Math.abs(clickX - lastPoint.x);
-        const dy = Math.abs(clickY - lastPoint.y);
-
-        // Add corner waypoint
-        let cornerWaypoint: { x: number; y: number };
-        if (dx > dy) {
-          cornerWaypoint = { x: clickX, y: lastPoint.y };
-        } else {
-          cornerWaypoint = { x: lastPoint.x, y: clickY };
-        }
+        // Add waypoint EXACTLY at clicked position - no automatic orthogonal constraint
+        const newWaypoint = { x: clickX, y: clickY };
 
         setDrawingWire({
           ...drawingWire,
-          waypoints: [...drawingWire.waypoints, cornerWaypoint],
+          waypoints: [...drawingWire.waypoints, newWaypoint],
         });
 
-        toast.success(`Corner ${drawingWire.waypoints.length + 1} added - Click more corners or click target pin to finish`);
+        toast.success(`Bend point ${drawingWire.waypoints.length + 1} added - Click more points or click target pin to finish`);
       }
     }
   };
@@ -832,6 +1066,68 @@ export const SimulationCanvas = () => {
   };
 
   // Remove a specific wire
+  // ═══════════════════════════════════════════════════════════════════
+  // 💾 PROJECT MANAGEMENT FUNCTIONS
+  // ═══════════════════════════════════════════════════════════════════
+
+  const handleSaveProject = () => {
+    const projectName = prompt('Enter project name:');
+    if (!projectName) return;
+
+    try {
+      saveProject({
+        name: projectName,
+        components: placedComponents,
+        wires: wires,
+        code: currentCode
+      });
+
+      toast.success(`💾 Project "${projectName}" saved!`);
+      setSavedProjects(getAllProjects());
+    } catch (error) {
+      toast.error('Failed to save project');
+      console.error(error);
+    }
+  };
+
+  const handleLoadProject = (projectId: string) => {
+    try {
+      const project = loadProject(projectId);
+      if (!project) {
+        toast.error('Project not found');
+        return;
+      }
+
+      setPlacedComponents(project.components);
+      setWires(project.wires);
+      setCurrentCode(project.code);
+
+      toast.success(`📂 Loaded "${project.name}"`);
+      setShowProjectsMenu(false);
+    } catch (error) {
+      toast.error('Failed to load project');
+      console.error(error);
+    }
+  };
+
+  const handleDeleteProject = (projectId: string) => {
+    if (!confirm('Delete this project? This cannot be undone.')) return;
+
+    try {
+      deleteProject(projectId);
+      setSavedProjects(getAllProjects());
+      toast.success('🗑️ Project deleted');
+    } catch (error) {
+      toast.error('Failed to delete project');
+      console.error(error);
+    }
+  };
+
+  const toggleProjectsMenu = () => {
+    setSavedProjects(getAllProjects());
+    setShowProjectsMenu(!showProjectsMenu);
+  };
+
   const removeWire = (wireId: string) => {
     const wire = wires.find((w) => w.id === wireId);
     if (!wire) return;
@@ -1059,6 +1355,141 @@ export const SimulationCanvas = () => {
         });
       }
 
+      // Register LCD components with engine
+      registerLCDComponents();
+      addDebugLog('info', 'LCD components registered with engine');
+
+      // Update LCD component props with compiled text (only when simulation starts)
+      if (compiledCode?.hasLCD && compiledCode?.lcdText) {
+        // 🔍 VALIDATE: Check if LiquidCrystal pins in code match actual wiring
+        const validateLCDPinConfiguration = (): boolean => {
+          if (!compiledCode?.code) return false;
+
+          // Extract LiquidCrystal initialization from code
+          const lcdInitRegex = /LiquidCrystal\s+lcd\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)?\s*\)/;
+          const match = compiledCode.code.match(lcdInitRegex);
+
+          if (!match) {
+            console.error(`\n${'='.repeat(50)}`);
+            console.error(`❌ LCD CODE ERROR`);
+            console.error(`   No valid LiquidCrystal lcd(...) initialization found`);
+            console.error(`   Expected: LiquidCrystal lcd(RS, EN, D4, D5, D6, D7);`);
+            console.error('='.repeat(50) + '\n');
+            toast.error('LCD Error: Missing LiquidCrystal lcd(...) initialization', { duration: 5000 });
+            addDebugLog('error', 'LCD initialization not found in code');
+            return false;
+          }
+
+          // Check if all 6 pins are provided
+          if (!match[6]) {
+            console.error(`\n${'='.repeat(50)}`);
+            console.error(`❌ LCD CODE ERROR`);
+            console.error(`   Incomplete LCD initialization - missing D7 pin`);
+            console.error(`   Found: LiquidCrystal lcd(${match.slice(1, 6).filter(Boolean).join(', ')})`);
+            console.error(`   Expected: LiquidCrystal lcd(RS, EN, D4, D5, D6, D7);`);
+            console.error('='.repeat(50) + '\n');
+            toast.error('LCD Error: Missing D7 pin in LiquidCrystal lcd(...)', { duration: 5000 });
+            addDebugLog('error', 'Incomplete LCD pin configuration');
+            return false;
+          }
+
+          const codePins = {
+            rs: parseInt(match[1]),
+            en: parseInt(match[2]),
+            d4: parseInt(match[3]),
+            d5: parseInt(match[4]),
+            d6: parseInt(match[5]),
+            d7: parseInt(match[6])
+          };
+
+          // Get actual wiring from components
+          const lcdComponents = placedComponents.filter(c => c.id.includes('lcd'));
+
+          for (const lcdComp of lcdComponents) {
+            const lcdWires = wires.filter(wire =>
+              wire.startPinId.startsWith(lcdComp.instanceId) ||
+              wire.endPinId.startsWith(lcdComp.instanceId)
+            );
+
+            const actualPins: Record<string, number> = {};
+            lcdWires.forEach(wire => {
+              const lcdPinId = wire.startPinId.startsWith(lcdComp.instanceId)
+                ? wire.startPinId
+                : wire.endPinId;
+              const lcdPinName = lcdPinId.split("-").pop();
+
+              const arduinoPinId = wire.startPinId.includes("arduino-uno")
+                ? wire.startPinId
+                : wire.endPinId;
+
+              if (!arduinoPinId || !arduinoPinId.includes("arduino-uno")) return;
+
+              const arduinoPinStr = extractArduinoPinNumber(arduinoPinId);
+              const arduinoPinNum = parseInt(arduinoPinStr, 10);
+
+              if (lcdPinName && !isNaN(arduinoPinNum)) {
+                actualPins[lcdPinName] = arduinoPinNum;
+              }
+            });
+
+            // Compare code pins with actual wiring
+            const pinNames = ['rs', 'en', 'd4', 'd5', 'd6', 'd7'];
+            const mismatches = [];
+
+            for (const pinName of pinNames) {
+              const wireName = pinName === 'en' ? 'e' : pinName;
+              const codePin = codePins[pinName as keyof typeof codePins];
+              const actualPin = actualPins[wireName];
+
+              if (actualPin && codePin !== actualPin) {
+                mismatches.push(`${pinName.toUpperCase()}: code says D${codePin}, wired to D${actualPin}`);
+              }
+            }
+
+            if (mismatches.length > 0) {
+              console.error(`\n${'='.repeat(50)}`);
+              console.error(`❌ LCD PIN MISMATCH!`);
+              console.error(`   Your code doesn't match your wiring:`);
+              mismatches.forEach(msg => console.error(`   • ${msg}`));
+              console.error(`\n   Code says: LiquidCrystal lcd(${Object.values(codePins).join(', ')})`);
+              console.error(`   But circuit has different wiring!`);
+              console.error(`\n   Fix: Update your code to match the wiring`);
+              console.error('='.repeat(50) + '\n');
+
+              toast.error('LCD Error: Pin mismatch! Code doesn\'t match wiring', { duration: 5000 });
+              addDebugLog('error', `LCD pin mismatch: ${mismatches.join(', ')}`);
+              return false;
+            }
+          }
+
+          console.log('✅ LCD pin configuration validated - code matches wiring');
+          return true;
+        };
+
+        // Validate before displaying LCD text
+        if (!validateLCDPinConfiguration()) {
+          console.log('📺 LCD validation failed - text will not be displayed');
+          // Don't update LCD props
+        } else {
+          // Validation passed - update LCD props to display text
+          setPlacedComponents((components) =>
+            components.map((comp) => {
+              if (comp.id.includes('lcd')) {
+                return {
+                  ...comp,
+                  props: {
+                    ...comp.props,
+                    lcdText: compiledCode?.lcdText, // Display LCD text from uploaded code
+                  },
+                };
+              }
+              return comp;
+            })
+          );
+          console.log('📺 LCD text displayed in simulation:', compiledCode?.lcdText);
+        }
+      }
+
       // Update circuit state immediately
       updateCircuitState();
 
@@ -1141,6 +1572,23 @@ export const SimulationCanvas = () => {
 
       // Reset blinking states
       setCurrentBlinkState({});
+
+      // Clear LCD display when simulation stops
+      setPlacedComponents((components) =>
+        components.map((comp) => {
+          if (comp.id.includes('lcd')) {
+            return {
+              ...comp,
+              props: {
+                ...comp.props,
+                lcdText: undefined, // Clear LCD text
+              },
+            };
+          }
+          return comp;
+        })
+      );
+      console.log('📺 LCD display cleared');
     }
   };
 
@@ -1243,7 +1691,7 @@ export const SimulationCanvas = () => {
 
       // Enhanced parsing for all Arduino functions
       const pinModes: Record<string, string> = {};
-      const pinStates: Record<string, boolean> = {};
+      const pinStates: Record<string, number> = {};
       const analogValues: Record<string, number> = {};
       const servoPositions: Record<string, number> = {};
       const serialOutput: string[] = [];
@@ -1303,10 +1751,15 @@ export const SimulationCanvas = () => {
         /digitalWrite\s*\(\s*([A-Za-z_]\w*|\d+)\s*,\s*(HIGH|LOW|1|0)\s*\)/gi;
       while ((match = digitalWriteRegex.exec(code)) !== null) {
         const pinRef = match[1];
+        const value = match[2];
         const pin = resolvePinReference(pinRef);
-        const value = match[2].toUpperCase();
         if (pin) {
-          pinStates[pin] = value === "HIGH" || value === "1";
+          pinStates[pin] = value === "HIGH" || value === "1" ? 1 : 0;
+
+          // Forward pin changes to LCD engine for realistic simulation
+          const lcdEngine = getLCDEngine();
+          lcdEngine.onPinChange(parseInt(pin), pinStates[pin] as 0 | 1, Date.now());
+
           console.log(
             `🔌 digitalWrite: Pin ${pin} (from "${pinRef}") = ${pinStates[pin] ? "HIGH" : "LOW"}`,
           );
@@ -1322,7 +1775,7 @@ export const SimulationCanvas = () => {
         const value = parseInt(match[2]);
         if (pin && value >= 0 && value <= 255) {
           analogValues[pin] = value;
-          pinStates[pin] = value > 0; // Convert to boolean for consistency
+          pinStates[pin] = value > 0 ? 1 : 0; // Convert to number (0|1)
           console.log(
             `🔌 analogWrite: Pin ${pin} (from "${pinRef}") = ${value} (${value > 0 ? "ON" : "OFF"})`,
           );
@@ -1353,12 +1806,149 @@ export const SimulationCanvas = () => {
         console.log(`Servo write: ${angle} degrees`);
       }
 
-      // Parse LCD functions
-      const lcdRegex = /lcd\.(?:print|setCursor|clear|home)\s*\(/gi;
-      const hasLCD = lcdRegex.test(code);
-      if (hasLCD) {
-        console.log("LCD functions detected");
+      // ═══════════════════════════════════════════════════════════════════
+      // 📺 LCD ENGINE REGISTRATION (Realistic Hardware Simulation)
+      // ═══════════════════════════════════════════════════════════════════
+
+      // Detect LCD usage and extract pin configuration
+      // Pattern: LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+      const lcdInitRegex = /LiquidCrystal\s+lcd\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)/i;
+      const lcdMatch = code.match(lcdInitRegex);
+
+      const hasLCD = lcdMatch !== null || /lcd\.(?:print|setCursor|clear|begin)/.test(code);
+      let lcdText = { line1: '', line2: '' };
+
+      if (hasLCD && lcdMatch) {
+        // Extract LCD pin configuration from code
+        const rs = parseInt(lcdMatch[1]);
+        const en = parseInt(lcdMatch[2]);
+        const d4 = parseInt(lcdMatch[3]);
+        const d5 = parseInt(lcdMatch[4]);
+        const d6 = parseInt(lcdMatch[5]);
+        const d7 = parseInt(lcdMatch[6]);
+
+        console.log(`📺 LCD Detected: LiquidCrystal(rs=${rs}, en=${en}, d4=${d4}, d5=${d5}, d6=${d6}, d7=${d7})`);
+
+        // Register LCD with engine
+        const lcdEngine = getLCDEngine();
+
+        // Find LCD instances in placed components
+        placedComponents
+          .filter(comp => comp.id.includes('lcd'))
+          .forEach(lcd => {
+            lcdEngine.registerLCD(lcd.instanceId, { rs, en, d4, d5, d6, d7 });
+            console.log(`📺 Registered LCD: ${lcd.instanceId}`);
+
+            // Get display buffer from engine (will be empty initially, populated by pin changes)
+            const buffer = lcdEngine.getDisplayBuffer(lcd.instanceId);
+            if (buffer) {
+              lcdText = buffer;
+            }
+          });
+      } else if (hasLCD) {
+        // LCD functions found but no LiquidCrystal initialization
+        // Use default pin configuration (common Arduino LCD shield pins)
+        console.log('⚠️ LCD functions detected but no LiquidCrystal initialization. Using default pins: rs=12, en=11, d4=5, d5=4, d6=3, d7=2');
+
+        const lcdEngine = getLCDEngine();
+        placedComponents
+          .filter(comp => comp.id.includes('lcd'))
+          .forEach(lcd => {
+            lcdEngine.registerLCD(lcd.instanceId, {
+              rs: 12, en: 11, d4: 5, d5: 4, d6: 3, d7: 2
+            });
+          });
       }
+
+      // ═══════════════════════════════════════════════════════════════════
+      // 📺 LCD TEXT PARSING (Static Code Analysis)
+      // ═══════════════════════════════════════════════════════════════════
+      // Parse lcd.print() and lcd.setCursor() to build display buffer
+      if (hasLCD) {
+        const displayBuffer = {
+          line1: '                ', // 16 spaces for 16x2 LCD
+          line2: '                '
+        };
+        let cursorRow = 0;
+        let cursorCol = 0;
+
+        // Find all LCD commands in order of appearance
+        const lcdCommandRegex = /lcd\.(print|println|setCursor|clear|begin)\s*\((.*?)\)/gi;
+        let cmdMatch;
+
+        while ((cmdMatch = lcdCommandRegex.exec(code)) !== null) {
+          const command = cmdMatch[1].toLowerCase();
+          const args = cmdMatch[2];
+
+          if (command === 'clear') {
+            // Clear display
+            displayBuffer.line1 = '                ';
+            displayBuffer.line2 = '                ';
+            cursorRow = 0;
+            cursorCol = 0;
+            console.log('📺 LCD: clear()');
+          }
+          else if (command === 'setcursor') {
+            // Parse setCursor(col, row)
+            const setCursorArgs = args.split(',').map(a => a.trim());
+            if (setCursorArgs.length >= 2) {
+              cursorCol = parseInt(setCursorArgs[0]) || 0;
+              cursorRow = parseInt(setCursorArgs[1]) || 0;
+              // Clamp to valid range
+              cursorRow = Math.max(0, Math.min(1, cursorRow));
+              cursorCol = Math.max(0, Math.min(15, cursorCol));
+              console.log(`📺 LCD: setCursor(${cursorCol}, ${cursorRow})`);
+            }
+          }
+          else if (command === 'print' || command === 'println') {
+            // Extract text from quotes
+            const textMatch = args.match(/["']([^"']*)["']/);
+            if (textMatch) {
+              const text = textMatch[1];
+              console.log(`📺 LCD: print("${text}") at row=${cursorRow}, col=${cursorCol}`);
+
+              // Write text to current cursor position
+              if (cursorRow === 0) {
+                const before = displayBuffer.line1.substring(0, cursorCol);
+                const after = displayBuffer.line1.substring(cursorCol + text.length);
+                displayBuffer.line1 = (before + text + after).substring(0, 16);
+                cursorCol += text.length;
+              } else if (cursorRow === 1) {
+                const before = displayBuffer.line2.substring(0, cursorCol);
+                const after = displayBuffer.line2.substring(cursorCol + text.length);
+                displayBuffer.line2 = (before + text + after).substring(0, 16);
+                cursorCol += text.length;
+              }
+
+              // Handle println - move to next line
+              if (command === 'println') {
+                cursorRow++;
+                cursorCol = 0;
+              }
+
+              // Clamp cursor position
+              if (cursorCol >= 16) {
+                cursorCol = 0;
+                cursorRow++;
+              }
+              if (cursorRow >= 2) {
+                cursorRow = 0;
+              }
+            }
+          }
+        }
+
+        // Trim trailing spaces for cleaner display
+        lcdText = {
+          line1: displayBuffer.line1,
+          line2: displayBuffer.line2
+        };
+
+        console.log('📺 LCD Final Display:');
+        console.log(`   Line 1: "${lcdText.line1}"`);
+        console.log(`   Line 2: "${lcdText.line2}"`);
+      }
+
 
       // Parse Serial functions
       const serialRegex = /Serial\.(?:print|println)\s*\(\s*"([^"]*)"\s*\)/gi;
@@ -1367,12 +1957,20 @@ export const SimulationCanvas = () => {
         console.log(`Serial output: ${match[1]}`);
       }
 
+      // Parse pulseIn function (for ultrasonic)
+      const pulseInRegex = /pulseIn\s*\(\s*([A-Za-z]?\d+)\s*,\s*HIGH\s*\)/gi;
+      while ((match = pulseInRegex.exec(code)) !== null) {
+        const pin = match[1];
+        pinStates[pin] = 1; // Simulate HIGH state during pulseIn
+        console.log(`pulseIn: Pin ${pin} detected`);
+      }
+
       // Parse tone() function for buzzer
       const toneRegex = /tone\s*\(\s*(\d+)\s*,\s*(\d+)\s*\)/gi;
       while ((match = toneRegex.exec(code)) !== null) {
         const pin = match[1];
         const frequency = match[2];
-        pinStates[pin] = true; // Buzzer active
+        pinStates[pin] = 1; // Buzzer active (represented as 1)
         console.log(`tone: Pin ${pin} at ${frequency}Hz`);
       }
 
@@ -1509,6 +2107,7 @@ export const SimulationCanvas = () => {
         code: code,
         timestamp: Date.now(),
         hasLCD,
+        lcdText,  // ← LCD text content parsed from lcd.print()
         pinVariableMap,  // NEW: Variable-to-pin mapping for validation
         functionTypes: {
           digital: Object.keys(pinStates).length,
@@ -1915,7 +2514,8 @@ export const SimulationCanvas = () => {
           size="icon"
           variant="secondary"
           className="h-12 w-12 rounded-full"
-          title="Export project (coming soon)"
+          onClick={handleSaveProject}
+          title="Save Project"
         >
           <Download className="h-5 w-5" />
         </Button>
@@ -1923,6 +2523,8 @@ export const SimulationCanvas = () => {
           size="icon"
           variant="secondary"
           className="h-12 w-12 rounded-full"
+          onClick={toggleProjectsMenu}
+          title="My Projects"
         >
           <MoreVertical className="h-5 w-5" />
         </Button>
@@ -1940,6 +2542,76 @@ export const SimulationCanvas = () => {
           )}
         </div>
       </header>
+
+      {/* Projects Menu Dropdown */}
+      {showProjectsMenu && (
+        <div
+          className="fixed inset-0 z-40"
+          onClick={() => setShowProjectsMenu(false)}
+        >
+          <div
+            className="absolute top-16 right-4 bg-white border border-gray-300 rounded-lg shadow-2xl p-4 z-50 w-96"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-center mb-4 border-b pb-3">
+              <h3 className="font-bold text-lg">📂 My Projects</h3>
+              <button
+                onClick={() => setShowProjectsMenu(false)}
+                className="text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded p-1"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {savedProjects.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-gray-500 mb-2">No saved projects</p>
+                <p className="text-sm text-gray-400">
+                  Click the Download button to save your first project
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {savedProjects
+                  .sort((a, b) => b.updatedAt - a.updatedAt)
+                  .map(project => (
+                    <div
+                      key={project.id}
+                      className="flex items-start justify-between p-3 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+                    >
+                      <div
+                        onClick={() => handleLoadProject(project.id)}
+                        className="flex-1 cursor-pointer"
+                      >
+                        <div className="font-medium text-gray-900">{project.name}</div>
+                        <div className="text-xs text-gray-500 mt-1">
+                          {new Date(project.updatedAt).toLocaleString()}
+                        </div>
+                        <div className="text-xs text-gray-400 mt-1">
+                          {project.components?.length || 0} components, {project.wires?.length || 0} wires
+                        </div>
+                      </div>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteProject(project.id);
+                        }}
+                        className="ml-3 p-2 text-red-500 hover:bg-red-50 rounded transition-colors"
+                        title="Delete project"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+              </div>
+            )}
+
+            <div className="mt-4 pt-3 border-t text-xs text-gray-500 text-center">
+              {savedProjects.length} project{savedProjects.length !== 1 ? 's' : ''} saved
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Canvas Area */}
       <div className="relative">
@@ -2066,246 +2738,251 @@ export const SimulationCanvas = () => {
           ))}
           {/* WOKWI-STYLE DEBUG PANEL - Real-time pin monitoring */}
           {isSimulating && (
-            <div className="fixed top-4 right-4 bg-white/95 border-2 border-blue-200 rounded-lg p-4 shadow-2xl z-50 min-w-[300px]">
-              <div className="flex items-center gap-2 mb-3">
+            <div className="fixed top-4 right-4 bg-white/95 border-2 border-blue-200 rounded-lg shadow-2xl z-50 min-w-[300px] max-w-[400px] max-h-[80vh] flex flex-col">
+              {/* Header - Fixed */}
+              <div className="flex items-center gap-2 p-4 border-b border-blue-100">
                 <div className="w-3 h-3 bg-green-500 rounded-full animate-pulse"></div>
                 <h3 className="text-lg font-bold text-blue-700">
                   🔍 Live Monitor
                 </h3>
               </div>
 
-              {/* Pin States Section */}
-              <div className="space-y-3">
-                <div className="bg-blue-50 p-3 rounded-lg">
-                  <div className="font-semibold text-blue-800 mb-2">
-                    📍 Arduino Pins:
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    {Array.from({ length: 14 }, (_, i) => {
-                      const pin = i.toString();
+              {/* Scrollable Content */}
+              <div className="overflow-y-auto overflow-x-hidden p-4" style={{ maxHeight: 'calc(80vh - 64px)' }}>
+                {/* Pin States Section */}
+                <div className="space-y-3">
+                  <div className="bg-blue-50 p-3 rounded-lg">
+                    <div className="font-semibold text-blue-800 mb-2">
+                      📍 Arduino Pins:
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      {Array.from({ length: 14 }, (_, i) => {
+                        const pin = i.toString();
 
-                      // Check blinking state first, then static states
-                      const isBlinking = currentBlinkState[pin];
-                      const isStaticActive =
-                        compiledCode.pinStates?.[pin] ||
-                        (compiledCode.analogValues?.[pin] || 0) > 0;
-                      const isActive =
-                        isBlinking !== undefined ? isBlinking : isStaticActive;
+                        // Check blinking state first, then static states
+                        const isBlinking = currentBlinkState[pin];
+                        const isStaticActive =
+                          compiledCode.pinStates?.[pin] ||
+                          (compiledCode.analogValues?.[pin] || 0) > 0;
+                        const isActive =
+                          isBlinking !== undefined ? isBlinking : isStaticActive;
 
-                      // Check direct pin usage OR variable usage
-                      let isUsed =
-                        compiledCode.code?.includes(`pinMode(${pin},`) ||
-                        compiledCode.code?.includes(`digitalWrite(${pin},`) ||
-                        compiledCode.code?.includes(`analogWrite(${pin},`) ||
-                        compiledCode.code?.includes(`digitalRead(${pin})`) ||
-                        compiledCode.code?.includes(`analogRead(${pin})`);
+                        // Check direct pin usage OR variable usage
+                        let isUsed =
+                          compiledCode.code?.includes(`pinMode(${pin},`) ||
+                          compiledCode.code?.includes(`digitalWrite(${pin},`) ||
+                          compiledCode.code?.includes(`analogWrite(${pin},`) ||
+                          compiledCode.code?.includes(`digitalRead(${pin})`) ||
+                          compiledCode.code?.includes(`analogRead(${pin})`);
 
-                      // Also check if any variable maps to this pin
-                      if (!isUsed && compiledCode.pinVariableMap) {
-                        const varsForPin = Object.entries(compiledCode.pinVariableMap)
-                          .filter(([_, pinNum]) => pinNum === pin)
-                          .map(([varName]) => varName);
+                        // Also check if any variable maps to this pin
+                        if (!isUsed && compiledCode.pinVariableMap) {
+                          const varsForPin = Object.entries(compiledCode.pinVariableMap)
+                            .filter(([_, pinNum]) => pinNum === pin)
+                            .map(([varName]) => varName);
 
-                        for (const varName of varsForPin) {
-                          if (compiledCode.code &&
-                            (compiledCode.code.includes(`pinMode(${varName},`) ||
-                              compiledCode.code.includes(`digitalWrite(${varName},`) ||
-                              compiledCode.code.includes(`analogWrite(${varName},`))) {
-                            isUsed = true;
-                            break;
+                          for (const varName of varsForPin) {
+                            if (compiledCode.code &&
+                              (compiledCode.code.includes(`pinMode(${varName},`) ||
+                                compiledCode.code.includes(`digitalWrite(${varName},`) ||
+                                compiledCode.code.includes(`analogWrite(${varName},`))) {
+                              isUsed = true;
+                              break;
+                            }
                           }
                         }
-                      }
 
-                      return isUsed ? (
-                        <div
-                          key={pin}
-                          className="flex items-center justify-between bg-white p-2 rounded border"
-                        >
-                          <span className="font-mono text-sm">Pin {pin}:</span>
-                          <div className="flex items-center gap-2">
-                            <div
-                              className={`w-3 h-3 rounded-full ${isActive
-                                ? "bg-red-500 animate-pulse shadow-lg"
-                                : "bg-gray-300"
-                                }`}
-                            ></div>
-                            <span
-                              className={`text-xs font-bold ${isActive ? "text-red-600" : "text-gray-500"
-                                }`}
-                            >
-                              {isActive ? "HIGH" : "LOW"}
-                              {currentBlinkState[pin] !== undefined && (
-                                <span className="text-xs text-blue-500 ml-1">
-                                  ⚡
-                                </span>
-                              )}
-                            </span>
-                          </div>
-                        </div>
-                      ) : null;
-                    })}
-                  </div>
-                </div>
-
-                {/* Components Status */}
-                <div className="bg-green-50 p-3 rounded-lg">
-                  <div className="font-semibold text-green-800 mb-2">
-                    💡 Components:
-                  </div>
-                  <div className="space-y-2">
-                    {placedComponents
-                      .filter((c) => !c.id.includes("arduino"))
-                      .map((comp) => {
-                        const pinState = getPinState(comp.instanceId);
-                        const connectedWires = wires.filter(
-                          (w) =>
-                            w.startPinId.startsWith(comp.instanceId) ||
-                            w.endPinId.startsWith(comp.instanceId),
-                        );
-
-                        // Find ALL Arduino connections and prioritize signal pins over GND/power
-                        const arduinoWires = connectedWires.filter(
-                          (w) =>
-                            w.startPinId.includes("arduino-uno") ||
-                            w.endPinId.includes("arduino-uno"),
-                        );
-
-                        // Extract pin numbers from all Arduino wires
-                        const arduinoPins = arduinoWires.map(w => ({
-                          wire: w,
-                          pin: extractArduinoPinNumber(
-                            w.startPinId.includes("arduino-uno")
-                              ? w.startPinId
-                              : w.endPinId
-                          )
-                        })).filter(p => p.pin !== null);
-
-                        // Prioritize signal pins (digital/analog) over power/ground
-                        const prioritizedPin = arduinoPins.find(p => {
-                          const pin = p.pin!;
-                          // Signal pins: numbers or A0-A5
-                          return /^\d+$/.test(pin) || /^A\d+$/.test(pin);
-                        }) || arduinoPins[0]; // Fallback to first pin if no signal pin
-
-                        const arduinoPin = prioritizedPin?.pin || null;
-
-                        return (
+                        return isUsed ? (
                           <div
-                            key={comp.instanceId}
+                            key={pin}
                             className="flex items-center justify-between bg-white p-2 rounded border"
                           >
+                            <span className="font-mono text-sm">Pin {pin}:</span>
                             <div className="flex items-center gap-2">
                               <div
-                                className={`w-4 h-4 rounded-full ${pinState
+                                className={`w-3 h-3 rounded-full ${isActive
                                   ? "bg-red-500 animate-pulse shadow-lg"
                                   : "bg-gray-300"
                                   }`}
                               ></div>
-                              <span className="text-sm font-medium">
-                                {comp.name}
-                              </span>
-                              {arduinoPin && (
-                                <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
-                                  Pin {arduinoPin}
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-right">
-                              <div
-                                className={`text-xs font-bold ${pinState ? "text-green-600" : "text-gray-500"
+                              <span
+                                className={`text-xs font-bold ${isActive ? "text-red-600" : "text-gray-500"
                                   }`}
                               >
-                                {pinState ? "🔴 ON" : "⚫ OFF"}
-                              </div>
-                              <div className="text-xs text-gray-400">
-                                {connectedWires.length} wire
-                                {connectedWires.length !== 1 ? "s" : ""}
-                              </div>
+                                {isActive ? "HIGH" : "LOW"}
+                                {currentBlinkState[pin] !== undefined && (
+                                  <span className="text-xs text-blue-500 ml-1">
+                                    ⚡
+                                  </span>
+                                )}
+                              </span>
                             </div>
                           </div>
-                        );
+                        ) : null;
                       })}
-                  </div>
-                </div>
-
-                {/* Code Status */}
-                {compiledCode.code && (
-                  <div className="bg-purple-50 p-3 rounded-lg">
-                    <div className="font-semibold text-purple-800 mb-2">
-                      ⚡ Simulation:
-                    </div>
-                    <div className="space-y-1 text-sm">
-                      <div className="flex justify-between">
-                        <span>Delay:</span>
-                        <span className="font-mono text-purple-600">
-                          {compiledCode.delays && compiledCode.delays.length > 0
-                            ? compiledCode.delays[0]
-                            : compiledCode.delayMs || 1000}
-                          ms
-                        </span>
-                      </div>
-                      {compiledCode.delays &&
-                        compiledCode.delays.length > 1 && (
-                          <div className="flex justify-between">
-                            <span>All Delays:</span>
-                            <span className="font-mono text-purple-600 text-xs">
-                              {compiledCode.delays.join(", ")}ms
-                            </span>
-                          </div>
-                        )}
-                      <div className="flex justify-between">
-                        <span>Blinking:</span>
-                        <span
-                          className={`font-bold ${compiledCode.hasBlinking
-                            ? "text-green-600"
-                            : "text-gray-500"
-                            }`}
-                        >
-                          {compiledCode.hasBlinking ? "🔄 Yes" : "❌ No"}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span>Active Pins:</span>
-                        <span className="font-mono text-blue-600">
-                          {Object.keys(compiledCode.pinStates || {}).length}
-                        </span>
-                      </div>
                     </div>
                   </div>
-                )}
 
-                {/* Pin Connection Registry - NEW! */}
-                <div className="bg-orange-50 p-3 rounded-lg border-2 border-orange-200">
-                  <div className="font-semibold text-orange-800 mb-2">
-                    🔌 Pin Connection Registry:
+                  {/* Components Status */}
+                  <div className="bg-green-50 p-3 rounded-lg">
+                    <div className="font-semibold text-green-800 mb-2">
+                      💡 Components:
+                    </div>
+                    <div className="space-y-2">
+                      {placedComponents
+                        .filter((c) => !c.id.includes("arduino"))
+                        .map((comp) => {
+                          const pinState = getPinState(comp.instanceId);
+                          const connectedWires = wires.filter(
+                            (w) =>
+                              w.startPinId.startsWith(comp.instanceId) ||
+                              w.endPinId.startsWith(comp.instanceId),
+                          );
+
+                          // Find ALL Arduino connections and prioritize signal pins over GND/power
+                          const arduinoWires = connectedWires.filter(
+                            (w) =>
+                              w.startPinId.includes("arduino-uno") ||
+                              w.endPinId.includes("arduino-uno"),
+                          );
+
+                          // Extract pin numbers from all Arduino wires
+                          const arduinoPins = arduinoWires.map(w => ({
+                            wire: w,
+                            pin: extractArduinoPinNumber(
+                              w.startPinId.includes("arduino-uno")
+                                ? w.startPinId
+                                : w.endPinId
+                            )
+                          })).filter(p => p.pin !== null);
+
+                          // Prioritize signal pins (digital/analog) over power/ground
+                          const prioritizedPin = arduinoPins.find(p => {
+                            const pin = p.pin!;
+                            // Signal pins: numbers or A0-A5
+                            return /^\d+$/.test(pin) || /^A\d+$/.test(pin);
+                          }) || arduinoPins[0]; // Fallback to first pin if no signal pin
+
+                          const arduinoPin = prioritizedPin?.pin || null;
+
+                          return (
+                            <div
+                              key={comp.instanceId}
+                              className="flex items-center justify-between bg-white p-2 rounded border"
+                            >
+                              <div className="flex items-center gap-2">
+                                <div
+                                  className={`w-4 h-4 rounded-full ${pinState
+                                    ? "bg-red-500 animate-pulse shadow-lg"
+                                    : "bg-gray-300"
+                                    }`}
+                                ></div>
+                                <span className="text-sm font-medium">
+                                  {comp.name}
+                                </span>
+                                {arduinoPin && (
+                                  <span className="text-xs text-blue-600 bg-blue-100 px-2 py-1 rounded">
+                                    Pin {arduinoPin}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-right">
+                                <div
+                                  className={`text-xs font-bold ${pinState ? "text-green-600" : "text-gray-500"
+                                    }`}
+                                >
+                                  {pinState ? "🔴 ON" : "⚫ OFF"}
+                                </div>
+                                <div className="text-xs text-gray-400">
+                                  {connectedWires.length} wire
+                                  {connectedWires.length !== 1 ? "s" : ""}
+                                </div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                    </div>
                   </div>
-                  <div className="text-xs text-orange-700 mb-2">
-                    {pinConnections.length} component{pinConnections.length !== 1 ? 's' : ''} connected
-                  </div>
-                  {pinConnections.length > 0 ? (
-                    <div className="space-y-1">
-                      {pinConnections.map((conn, index) => (
-                        <div
-                          key={conn.wireId}
-                          className="bg-white p-2 rounded border border-orange-200 text-xs"
-                        >
-                          <span className="font-mono text-orange-900">
-                            {conn.componentName} → Pin {conn.arduinoPin}
+
+                  {/* Code Status */}
+                  {compiledCode.code && (
+                    <div className="bg-purple-50 p-3 rounded-lg">
+                      <div className="font-semibold text-purple-800 mb-2">
+                        ⚡ Simulation:
+                      </div>
+                      <div className="space-y-1 text-sm">
+                        <div className="flex justify-between">
+                          <span>Delay:</span>
+                          <span className="font-mono text-purple-600">
+                            {compiledCode.delays && compiledCode.delays.length > 0
+                              ? compiledCode.delays[0]
+                              : compiledCode.delayMs || 1000}
+                            ms
                           </span>
                         </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="text-xs text-gray-500 italic">
-                      No components connected to Arduino pins
+                        {compiledCode.delays &&
+                          compiledCode.delays.length > 1 && (
+                            <div className="flex justify-between">
+                              <span>All Delays:</span>
+                              <span className="font-mono text-purple-600 text-xs">
+                                {compiledCode.delays.join(", ")}ms
+                              </span>
+                            </div>
+                          )}
+                        <div className="flex justify-between">
+                          <span>Blinking:</span>
+                          <span
+                            className={`font-bold ${compiledCode.hasBlinking
+                              ? "text-green-600"
+                              : "text-gray-500"
+                              }`}
+                          >
+                            {compiledCode.hasBlinking ? "🔄 Yes" : "❌ No"}
+                          </span>
+                        </div>
+                        <div className="flex justify-between">
+                          <span>Active Pins:</span>
+                          <span className="font-mono text-blue-600">
+                            {Object.keys(compiledCode.pinStates || {}).length}
+                          </span>
+                        </div>
+                      </div>
                     </div>
                   )}
-                  <div className="text-xs text-gray-500 mt-2">
-                    ℹ️ This data is logged to console for backend storage
+
+                  {/* Pin Connection Registry - NEW! */}
+                  <div className="bg-orange-50 p-3 rounded-lg border-2 border-orange-200">
+                    <div className="font-semibold text-orange-800 mb-2">
+                      🔌 Pin Connection Registry:
+                    </div>
+                    <div className="text-xs text-orange-700 mb-2">
+                      {pinConnections.length} component{pinConnections.length !== 1 ? 's' : ''} connected
+                    </div>
+                    {pinConnections.length > 0 ? (
+                      <div className="space-y-1">
+                        {pinConnections.map((conn, index) => (
+                          <div
+                            key={conn.wireId}
+                            className="bg-white p-2 rounded border border-orange-200 text-xs"
+                          >
+                            <span className="font-mono text-orange-900">
+                              {conn.componentName} → Pin {conn.arduinoPin}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-xs text-gray-500 italic">
+                        No components connected to Arduino pins
+                      </div>
+                    )}
+                    <div className="text-xs text-gray-500 mt-2">
+                      ℹ️ This data is logged to console for backend storage
+                    </div>
                   </div>
                 </div>
               </div>
+              {/* End scrollable content */}
             </div>
           )}
           {/* Wire SVG Layer */}
@@ -2313,16 +2990,21 @@ export const SimulationCanvas = () => {
             className="absolute inset-0 pointer-events-none"
             style={{ width: "100%", height: "100%", zIndex: 1000 }}
           >
-            {/* Existing wires - TRUE Wokwi style (straight lines + stroke-linejoin rounding) */}
+            {/* Existing wires - MANUAL ROUTING with waypoints */}
             {wires.map((wire) => {
               const endpoints = getWireEndpoints(wire);
               if (!endpoints) return null; // Skip if components are missing
 
+              // Use waypoint-based path if waypoints exist, otherwise use Manhattan routing
+              const wirePath = (wire.waypoints && wire.waypoints.length > 0)
+                ? createWaypointPath(wire)  // Manual routing with user-placed waypoints
+                : createManhattanPath(wire); // Fallback to auto-routing for old wires
+
               return (
                 <g key={wire.id} className="pointer-events-auto">
                   <path
-                    d={createManhattanPath(wire)}
-                    stroke="#00c853"    // Vivid green color
+                    d={wirePath}
+                    stroke="#00c853"    // Green color for all wires
                     strokeWidth="3"
                     strokeLinecap="round"
                     strokeLinejoin="round"

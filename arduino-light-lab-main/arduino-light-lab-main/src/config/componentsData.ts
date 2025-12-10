@@ -260,6 +260,21 @@ export const COMPONENT_DATA: ComponentConfig[] = [
     height: 80,
     imagePath: "/components/gps-neo6m.svg",
   },
+  {
+    id: "turbidity-sensor",
+    name: "Turbidity Sensor",
+    category: "sensors",
+    description: "Water Quality Turbidity Sensor Module",
+    pins: [
+      { id: "vcc", label: "VCC", x: 0, y: 0, type: "power" },
+      { id: "gnd", label: "GND", x: 0, y: 15, type: "ground" },
+      { id: "dout", label: "DO", x: 0, y: 30, type: "digital" },
+      { id: "aout", label: "AO", x: 0, y: 45, type: "analog" },
+    ],
+    width: 70,
+    height: 80,
+    imagePath: "/components/turbidity-sensor.svg",
+  },
 
   // ===== DISPLAYS =====
   {
@@ -694,6 +709,7 @@ export const getComponentIcon = (componentId: string) => {
     "soil-moisture": Sprout,
     mpu6050: Compass,
     "gps-neo6m": MapPin,
+    "turbidity-sensor": Droplets,
     "lcd-16x2": Monitor,
     "oled-128x64": Monitor,
     "7segment": Binary,

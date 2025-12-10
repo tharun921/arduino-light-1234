@@ -1,5 +1,7 @@
 import { useState } from "react";
 import { PlacedComponent } from "@/types/components";
+import LCDComponent from "./LCDComponent";
+import { getLCDEngine } from "@/simulation/LCDEngine";
 
 interface UniversalComponentProps {
   component: PlacedComponent;
@@ -45,6 +47,29 @@ export const UniversalComponent = ({
     }
   };
 
+  // Check if this is an LCD component
+  const isLCD = component.id.includes("lcd");
+
+  // Get LCD display buffer - prioritize component.props.lcdText (from compilation)
+  // This ensures the parsed static text from lcd.print() is displayed
+  let lcdText = { line1: '', line2: '' };
+  if (isLCD) {
+    // First, check if we have LCD text from code compilation (stored in props)
+    if (component.props?.lcdText) {
+      lcdText = component.props.lcdText as { line1: string; line2: string };
+      console.log(`📺 LCD text from component props for ${component.instanceId}:`, lcdText);
+    }
+    // Fallback to engine if still empty and simulation is running
+    else if (isSimulating) {
+      const lcdEngine = getLCDEngine();
+      const buffer = lcdEngine.getDisplayBuffer(component.instanceId);
+      if (buffer && (buffer.line1 || buffer.line2)) {
+        lcdText = buffer;
+        console.log(`📺 LCD text from engine for ${component.instanceId}:`, buffer);
+      }
+    }
+  }
+
   // Render component with image or placeholder
   return (
     <div
@@ -66,7 +91,12 @@ export const UniversalComponent = ({
     >
       {/* Component Image or Placeholder */}
       <div className="relative w-full h-full">
-        {component.imagePath ? (
+        {isLCD ? (
+          /* Render LCD with text from engine */
+          <svg width={component.width} height={component.height} viewBox="0 0 180 80">
+            <LCDComponent x={0} y={0} rotation={0} lcdText={lcdText} />
+          </svg>
+        ) : component.imagePath ? (
           <>
             <img
               src={component.imagePath}

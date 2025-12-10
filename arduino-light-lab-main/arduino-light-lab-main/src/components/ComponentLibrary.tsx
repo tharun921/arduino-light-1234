@@ -25,6 +25,7 @@ export const ComponentLibrary = ({ onClose, onAddComponent }: ComponentLibraryPr
     { id: 'displays', label: 'Displays' },
     { id: 'actuators', label: 'Actuators' },
     { id: 'communication', label: 'Communication' },
+    { id: 'modules', label: 'Modules' },
     { id: 'basic', label: 'Basic' },
   ];
 
@@ -39,7 +40,7 @@ export const ComponentLibrary = ({ onClose, onAddComponent }: ComponentLibraryPr
           <X className="h-4 w-4" />
         </Button>
       </div>
-      
+
       <Tabs defaultValue="sensors" className="h-[calc(100%-80px)]">
         <div className="px-4 pt-2">
           <TabsList className="grid w-full grid-cols-3">
@@ -47,8 +48,9 @@ export const ComponentLibrary = ({ onClose, onAddComponent }: ComponentLibraryPr
             <TabsTrigger value="displays">Displays</TabsTrigger>
             <TabsTrigger value="actuators">Motors</TabsTrigger>
           </TabsList>
-          <TabsList className="grid w-full grid-cols-3 mt-2">
+          <TabsList className="grid w-full grid-cols-4 mt-2">
             <TabsTrigger value="communication">Comm</TabsTrigger>
+            <TabsTrigger value="modules">Modules</TabsTrigger>
             <TabsTrigger value="basic">Basic</TabsTrigger>
             <TabsTrigger value="boards">Boards</TabsTrigger>
           </TabsList>
