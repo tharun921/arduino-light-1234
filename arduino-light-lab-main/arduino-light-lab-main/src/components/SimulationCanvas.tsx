@@ -7,11 +7,14 @@ import { CodeEditor } from "./CodeEditor";
 import { DebugConsole, DebugLog } from "./DebugConsole";
 import { getUltrasonicEngine } from "../simulation/UltrasonicEngine";
 import { getLCDEngine } from "../simulation/LCDEngine";
+import { getTurbidityEngine } from "../simulation/TurbidityEngine";
 import { simulateLCDFromCode } from "../simulation/LCDHardwareSimulator";
 import { UniversalComponent } from "./components/UniversalComponent";
 import { PlacedComponent } from "@/types/components";
 import { COMPONENT_DATA } from "@/config/componentsData";
 import { saveProject, getAllProjects, loadProject, deleteProject, type Project } from "@/utils/projectStorage";
+import { AVREmulator, type HexSegment } from "../emulator/AVREmulator";
+import { HardwareAbstractionLayer } from "../emulator/HardwareAbstractionLayer";
 
 
 interface Wire {
@@ -89,6 +92,16 @@ export const SimulationCanvas = () => {
   const [showProjectsMenu, setShowProjectsMenu] = useState(false);
   const [savedProjects, setSavedProjects] = useState<Project[]>([]);
   const canvasRef = useRef<HTMLDivElement>(null);
+
+  // Compiler Mode state
+  const [useCompilerMode, setUseCompilerMode] = useState(false); // Toggle between regex and compiler
+  const [avrEmulator, setAvrEmulator] = useState<AVREmulator | null>(null);
+  const [emulatorRunning, setEmulatorRunning] = useState(false);
+  const emulatorIntervalRef = useRef<number | null>(null);
+
+  // Water Chamber Turbidity Editor state
+  const [editingWaterChamber, setEditingWaterChamber] = useState<string | null>(null); // instanceId of water chamber being edited
+  const [waterChamberTurbidity, setWaterChamberTurbidity] = useState<number>(50); // Current turbidity value (0-1000 NTU)
 
 
   // ═══════════════════════════════════════════════════════════════════
@@ -458,6 +471,77 @@ export const SimulationCanvas = () => {
 
       lcdEngine.registerLCD(lcdComponent.instanceId, lcdPinConfig);
       console.log(`✅ LCD registered with engine:`, lcdPinConfig);
+    });
+  };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 💧 TURBIDITY ENGINE INTEGRATION
+  // ═══════════════════════════════════════════════════════════════════
+  const registerTurbidityProbes = () => {
+    console.log("💧 Registering turbidity probes...");
+
+    const turbidityEngine = getTurbidityEngine((analogPin, voltage) => {
+      console.log(`📊 Turbidity analog A${analogPin - 14} = ${voltage.toFixed(2)}V`);
+    });
+
+    const probes = placedComponents.filter(c => c.id.includes("turbidity-probe"));
+    const sensors = placedComponents.filter(c => c.id.includes("turbidity-sensor"));
+
+    if (probes.length === 0) {
+      console.log("  No turbidity probes found");
+      return;
+    }
+
+    probes.forEach(probe => {
+      const sensor = sensors.find(s => wires.some(w =>
+        (w.startPinId.startsWith(probe.instanceId) || w.endPinId.startsWith(probe.instanceId)) &&
+        (w.startPinId.startsWith(s.instanceId) || w.endPinId.startsWith(s.instanceId))
+      ));
+
+      if (!sensor) return;
+
+      const sensorWires = wires.filter(w =>
+        w.startPinId.startsWith(sensor.instanceId) || w.endPinId.startsWith(sensor.instanceId)
+      );
+
+      const pinMap: Record<string, number> = {};
+      sensorWires.forEach(w => {
+        const sPin = w.startPinId.startsWith(sensor.instanceId) ? w.startPinId : w.endPinId;
+        const aPin = w.startPinId.includes("arduino-uno") ? w.startPinId :
+          (w.endPinId.includes("arduino-uno") ? w.endPinId : null);
+        if (!aPin) return;
+
+        const sName = sPin.split("-").pop();
+        const aStr = extractArduinoPinNumber(aPin);
+        if (!sName || !aStr) return;
+
+        let aNum = aStr.startsWith('A') ? 14 + parseInt(aStr.substring(1)) : parseInt(aStr);
+        if (!isNaN(aNum)) pinMap[sName] = aNum;
+      });
+
+      if (!pinMap.aout) return;
+
+      turbidityEngine.registerProbe(probe.instanceId, {
+        ledPlus: pinMap.vcc || 5,
+        ledMinus: pinMap.gnd || 0,
+        phPlus: pinMap.dout || 2,
+        phMinus: pinMap.gnd || 0,
+        analogOut: pinMap.aout
+      });
+
+      const chambers = placedComponents.filter(c => c.id.includes("water-chamber"));
+      const chamber = chambers.find(ch => wires.some(w =>
+        (w.startPinId.startsWith(probe.instanceId) || w.endPinId.startsWith(probe.instanceId)) &&
+        (w.startPinId.startsWith(ch.instanceId) || w.endPinId.startsWith(ch.instanceId))
+      ));
+
+      if (chamber) {
+        turbidityEngine.setWaterChamberConnection(probe.instanceId, true);
+        turbidityEngine.setTurbidity(probe.instanceId, 50);
+        console.log(`  ✓ Probe connected to chamber - 50 NTU`);
+      }
+
+      console.log(`✅ Turbidity probe registered:`, pinMap);
     });
   };
 
@@ -1191,6 +1275,72 @@ export const SimulationCanvas = () => {
     toast.success("Canvas cleared!");
   };
 
+  // ═══════════════════════════════════════════════════════════════════
+  // 💧 WATER CHAMBER TURBIDITY EDITING
+  // ═══════════════════════════════════════════════════════════════════
+
+  // Open water chamber turbidity editor
+  const handleWaterChamberDoubleClick = (component: PlacedComponent) => {
+    if (!component.id.includes('water-chamber')) return;
+
+    setEditingWaterChamber(component.instanceId);
+
+    // Get current turbidity value from turbidity engine if available
+    const turbidityEngine = getTurbidityEngine();
+
+    // Find connected turbidity sensors
+    const connectedSensors = placedComponents.filter(c =>
+      c.id.includes('turbidity') &&
+      wires.some(w =>
+        (w.startPinId.startsWith(c.instanceId) && w.endPinId.startsWith(component.instanceId)) ||
+        (w.endPinId.startsWith(c.instanceId) && w.startPinId.startsWith(component.instanceId))
+      )
+    );
+
+    if (connectedSensors.length > 0) {
+      const sensorState = turbidityEngine.getProbeState(connectedSensors[0].instanceId);
+      if (sensorState) {
+        setWaterChamberTurbidity(sensorState.turbidity);
+      }
+    }
+
+    toast.info(`Editing water chamber turbidity`);
+  };
+
+  // Update turbidity value
+  const handleTurbidityChange = (newTurbidity: number) => {
+    setWaterChamberTurbidity(newTurbidity);
+
+    if (!editingWaterChamber) return;
+
+    const turbidityEngine = getTurbidityEngine();
+
+    // Find the water chamber component
+    const waterChamber = placedComponents.find(c => c.instanceId === editingWaterChamber);
+    if (!waterChamber) return;
+
+    // Find all turbidity sensors connected to this water chamber
+    const connectedSensors = placedComponents.filter(c =>
+      c.id.includes('turbidity') &&
+      wires.some(w =>
+        (w.startPinId.startsWith(c.instanceId) && w.endPinId.startsWith(waterChamber.instanceId)) ||
+        (w.endPinId.startsWith(c.instanceId) && w.startPinId.startsWith(waterChamber.instanceId))
+      )
+    );
+
+    // Update turbidity for all connected sensors
+    connectedSensors.forEach(sensor => {
+      turbidityEngine.setTurbidity(sensor.instanceId, newTurbidity);
+    });
+
+    console.log(`💧 Water chamber turbidity set to ${newTurbidity} NTU for ${connectedSensors.length} connected sensors`);
+  };
+
+  // Close water chamber editor
+  const closeWaterChamberEditor = () => {
+    setEditingWaterChamber(null);
+  };
+
   // Update circuit state based on connections
   const updateCircuitState = () => {
     console.log("Updating circuit state based on connections");
@@ -1654,6 +1804,93 @@ export const SimulationCanvas = () => {
     }, 100);
   };
 
+  // ═══════════════════════════════════════════════════════════════════
+  // 🚀 COMPILER MODE - Real AVR Compilation and Emulation
+  // ═══════════════════════════════════════════════════════════════════
+
+  /**
+   * Executes Arduino code using real compilation and AVR emulation
+   */
+  const executeCodeWithCompiler = async (code: string) => {
+    try {
+      console.log('🔨 Compiler Mode: Starting compilation...');
+      addDebugLog('info', 'Compiling with Arduino CLI...');
+
+      const response = await fetch('http://localhost:3001/api/compile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, board: 'arduino:avr:uno' })
+      });
+
+      const result = await response.json();
+
+      if (!result.success) {
+        console.error('❌ Compilation failed:', result.errors);
+        addDebugLog('error', `Compilation failed: ${result.errors.join(', ')}`);
+        toast.error('Compilation failed!');
+        setIsCodeUploaded(false);
+        return;
+      }
+
+      console.log('✅ Compilation successful!');
+      addDebugLog('info', 'Compilation successful!');
+
+      const hal = new HardwareAbstractionLayer();
+      hal.onPinChange((pin: number, value: 0 | 1) => {
+        setCompiledCode(prev => ({
+          ...prev,
+          pinStates: { ...prev.pinStates, [pin.toString()]: value }
+        }));
+        getLCDEngine().onPinChange(pin, value, Date.now());
+        setForceUpdate(prev => prev + 1);
+      });
+
+      const emulator = new AVREmulator(hal);
+      emulator.loadHex(result.binaryData as HexSegment[]);
+      setAvrEmulator(emulator);
+
+      toast.success('✅ Code compiled and loaded!');
+      setIsCodeUploaded(true);
+      startEmulatorLoop(emulator);
+
+    } catch (error: any) {
+      console.error('💥 Compiler error:', error);
+      if (error.message?.includes('fetch')) {
+        console.warn('⚠️ Backend unavailable, using simple mode');
+        toast.warning('Backend unavailable, using simple mode');
+        executeCode(code);
+      } else {
+        toast.error('Compilation failed!');
+      }
+      setIsCodeUploaded(false);
+    }
+  };
+
+  const startEmulatorLoop = (emulator: AVREmulator) => {
+    if (emulatorIntervalRef.current) clearInterval(emulatorIntervalRef.current);
+    setEmulatorRunning(true);
+    emulatorIntervalRef.current = window.setInterval(() => {
+      if (emulator && !emulator.halted) {
+        const executed = emulator.run(1000);
+        if (executed === 0) stopEmulatorLoop();
+      }
+    }, 16);
+  };
+
+  const stopEmulatorLoop = () => {
+    if (emulatorIntervalRef.current) {
+      clearInterval(emulatorIntervalRef.current);
+      emulatorIntervalRef.current = null;
+    }
+    setEmulatorRunning(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (emulatorIntervalRef.current) clearInterval(emulatorIntervalRef.current);
+    };
+  }, []);
+
   // Enhanced Arduino compiler - supports all components and functions
   const executeCode = (code: string) => {
     try {
@@ -1909,11 +2146,19 @@ export const SimulationCanvas = () => {
 
               // Write text to current cursor position
               if (cursorRow === 0) {
+                // Ensure line1 is at least 16 characters with spaces
+                displayBuffer.line1 = displayBuffer.line1.padEnd(16, ' ');
+
+                // Insert text at cursor position
                 const before = displayBuffer.line1.substring(0, cursorCol);
                 const after = displayBuffer.line1.substring(cursorCol + text.length);
                 displayBuffer.line1 = (before + text + after).substring(0, 16);
                 cursorCol += text.length;
               } else if (cursorRow === 1) {
+                // Ensure line2 is at least 16 characters with spaces
+                displayBuffer.line2 = displayBuffer.line2.padEnd(16, ' ');
+
+                // Insert text at cursor position
                 const before = displayBuffer.line2.substring(0, cursorCol);
                 const after = displayBuffer.line2.substring(cursorCol + text.length);
                 displayBuffer.line2 = (before + text + after).substring(0, 16);
@@ -2627,7 +2872,10 @@ export const SimulationCanvas = () => {
         >
           {/* Render all placed components */}
           {placedComponents.map((component) => (
-            <div key={`${component.instanceId}-${forceUpdate}`}>
+            <div
+              key={`${component.instanceId}-${forceUpdate}`}
+              onDoubleClick={() => handleWaterChamberDoubleClick(component)}
+            >
               <UniversalComponent
                 component={component}
                 isSimulating={isSimulating}
@@ -2985,6 +3233,104 @@ export const SimulationCanvas = () => {
               {/* End scrollable content */}
             </div>
           )}
+
+          {/* Water Chamber Turbidity Editor Panel */}
+          {editingWaterChamber && (() => {
+            const waterChamber = placedComponents.find(c => c.instanceId === editingWaterChamber);
+            if (!waterChamber) return null;
+
+            // Get turbidity quality label
+            const getTurbidityLabel = (turbidity: number) => {
+              if (turbidity <= 100) return { text: "Pure Water", color: "text-blue-600" };
+              if (turbidity <= 300) return { text: "Slightly Turbid", color: "text-green-600" };
+              if (turbidity <= 600) return { text: "Turbid", color: "text-yellow-600" };
+              if (turbidity <= 900) return { text: "Very Turbid", color: "text-orange-600" };
+              return { text: "Dirty Water", color: "text-red-600" };
+            };
+
+            const label = getTurbidityLabel(waterChamberTurbidity);
+
+            return (
+              <>
+                {/* Backdrop - click to close */}
+                <div
+                  className="absolute inset-0 bg-black bg-opacity-10 z-[2000]"
+                  onClick={closeWaterChamberEditor}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') closeWaterChamberEditor();
+                  }}
+                  tabIndex={0}
+                />
+
+                {/* Editing Panel */}
+                <div
+                  className="absolute bg-gray-800 text-white rounded-lg shadow-2xl p-4 z-[2001]"
+                  style={{
+                    left: `${waterChamber.x + waterChamber.width / 2}px`,
+                    top: `${waterChamber.y - 120}px`,
+                    transform: 'translateX(-50%)',
+                    minWidth: '400px',
+                  }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-3 pb-2 border-b border-gray-600">
+                    <h3 className="font-bold text-lg flex items-center gap-2">
+                      💧 Editing Water Chamber
+                    </h3>
+                    <button
+                      onClick={closeWaterChamberEditor}
+                      className="text-gray-400 hover:text-white transition-colors"
+                    >
+                      ✕
+                    </button>
+                  </div>
+
+                  {/* Turbidity Label */}
+                  <div className="mb-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-300">Turbidity:</span>
+                      <span className={`font-bold text-lg ${label.color}`}>
+                        {label.text}
+                      </span>
+                    </div>
+                    <div className="text-xs text-gray-400 text-right">
+                      {waterChamberTurbidity.toFixed(0)} NTU
+                    </div>
+                  </div>
+
+                  {/* Slider */}
+                  <div className="mb-2">
+                    <input
+                      type="range"
+                      min="0"
+                      max="1000"
+                      step="10"
+                      value={waterChamberTurbidity}
+                      onChange={(e) => handleTurbidityChange(parseFloat(e.target.value))}
+                      className="w-full h-2 bg-gradient-to-r from-blue-500 via-yellow-500 to-red-600 rounded-lg appearance-none cursor-pointer"
+                      style={{
+                        accentColor: '#3b82f6',
+                      }}
+                    />
+                  </div>
+
+                  {/* Scale Labels */}
+                  <div className="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>0 NTU<br />(Pure)</span>
+                    <span className="text-center">500 NTU<br />(Medium)</span>
+                    <span className="text-right">1000 NTU<br />(Dirty)</span>
+                  </div>
+
+                  {/* Instructions */}
+                  <div className="mt-3 pt-3 border-t border-gray-600 text-xs text-gray-400">
+                    💡 Tip: Adjust the slider to change water turbidity. Connected sensors will reflect this change.
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+
           {/* Wire SVG Layer */}
           <svg
             className="absolute inset-0 pointer-events-none"

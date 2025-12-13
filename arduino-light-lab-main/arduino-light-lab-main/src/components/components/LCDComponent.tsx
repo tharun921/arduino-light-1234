@@ -18,38 +18,38 @@ const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0, lcdText
         <g transform={`translate(${x}, ${y}) rotate(${rotation})`}>
             {/* LCD 16x2 Display - 180x80px */}
 
-            {/* Main PCB - Green board */}
+            {/* Main PCB - Darker green board */}
             <rect
                 x="0"
                 y="0"
                 width="180"
                 height="80"
-                fill="#2a7f2f"
-                stroke="#1a5f1f"
+                fill="#1a5c3a"
+                stroke="#0d3020"
                 strokeWidth="2"
                 rx="3"
             />
 
-            {/* LCD Screen area - Yellow-green display */}
+            {/* LCD Screen area - Black frame */}
             <rect
                 x="10"
                 y="12"
                 width="160"
                 height="45"
-                fill="#9acd32"
-                stroke="#2a7f2f"
+                fill="#000000"
+                stroke="#0d3020"
                 strokeWidth="2"
                 rx="2"
             />
 
-            {/* LCD Display segments - darker area */}
+            {/* LCD Display segments - dark olive area */}
             <rect
                 x="15"
                 y="17"
                 width="150"
                 height="35"
-                fill="#b0e040"
-                opacity="0.7"
+                fill="#4a5320"
+                opacity="1"
                 rx="1"
             />
 

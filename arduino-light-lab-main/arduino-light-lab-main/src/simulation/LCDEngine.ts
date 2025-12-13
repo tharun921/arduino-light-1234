@@ -231,10 +231,11 @@ class LCDInstance {
      * Get current display buffer (for UI rendering)
      */
     getDisplayBuffer(): { line1: string; line2: string } {
-        return {
-            line1: this.state.displayBuffer[0].join(''),
-            line2: this.state.displayBuffer[1].join('')
-        };
+        // Ensure both lines are exactly 16 characters
+        const line1 = this.state.displayBuffer[0].join('').padEnd(16, ' ').substring(0, 16);
+        const line2 = this.state.displayBuffer[1].join('').padEnd(16, ' ').substring(0, 16);
+
+        return { line1, line2 };
     }
 
     /**
@@ -244,7 +245,7 @@ class LCDInstance {
         return this.instanceId;
     }
 
-    /**
+    /**   
      * Reset LCD to initial state
      */
     reset(): void {

@@ -1,0 +1,39 @@
+<svg width="220" height="380" viewBox="0 0 220 380" xmlns="http://www.w3.org/2000/svg">
+
+  <!-- Yellow sensor on top -->
+  <circle cx="110" cy="25" r="14" fill="#FFD73A" stroke="#000" stroke-width="2"/>
+
+  <!-- Top rim -->
+  <ellipse cx="110" cy="50" rx="70" ry="18" fill="#9BD8FF" opacity="0.7" stroke="#5EC2FF" stroke-width="6"/>
+
+  <!-- Glass outer body -->
+  <path d="M55 55 
+           L40 340 
+           Q110 360 180 340 
+           L165 55 
+           Q110 65 55 55Z"
+        fill="#9BD8FF55"
+        stroke="#5EC2FF"
+        stroke-width="6"/>
+
+  <!-- Inner water -->
+  <path d="M75 90
+           L62 320
+           Q110 338 158 320
+           L145 90
+           Q110 98 75 90Z"
+        fill="#7CCBFF99"/>
+
+  <!-- Bottom rim -->
+  <ellipse cx="110" cy="350" rx="70" ry="18"
+           fill="#9BD8FF88"
+           stroke="#5EC2FF"
+           stroke-width="6"/>
+
+  <!-- Measurement text -->
+  <text x="25" y="120" fill="#777" font-size="22" font-family="Arial">500ml</text>
+  <text x="25" y="170" fill="#777" font-size="22" font-family="Arial">400ml</text>
+  <text x="25" y="220" fill="#777" font-size="22" font-family="Arial">300ml</text>
+  <text x="25" y="270" fill="#777" font-size="22" font-family="Arial">200ml</text>
+
+</svg>

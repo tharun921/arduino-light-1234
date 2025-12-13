@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const compiler = require('./compiler/ArduinoCompiler');
 require('dotenv').config();
 
 const app = express();
@@ -19,6 +20,7 @@ mongoose.connect(MONGODB_URI, {
 })
     .then(() => console.log('✅ Connected to MongoDB'))
     .catch((err) => console.error('❌ MongoDB connection error:', err));
+
 
 // Project Schema
 const ProjectSchema = new mongoose.Schema({
@@ -173,7 +175,66 @@ app.put('/api/projects/:id', async (req, res) => {
     }
 });
 
+// ============== ARDUINO COMPILER ROUTES ==============
+
+// GET compiler status - Check if Arduino CLI is available
+app.get('/api/compile/check', async (req, res) => {
+    try {
+        const status = await compiler.checkArduinoCLI();
+        res.json({
+            success: true,
+            ...status
+        });
+    } catch (error) {
+        res.json({
+            success: false,
+            available: false,
+            error: error.message
+        });
+    }
+});
+
+// POST compile Arduino code
+app.post('/api/compile', async (req, res) => {
+    try {
+        const { code, board } = req.body;
+
+        // Validation
+        if (!code || typeof code !== 'string') {
+            return res.status(400).json({
+                success: false,
+                error: 'Code is required and must be a string'
+            });
+        }
+
+        console.log('\n' + '='.repeat(60));
+        console.log('📨 Compilation request received');
+        console.log('📋 Board:', board || 'arduino:avr:uno');
+        console.log('📝 Code length:', code.length, 'characters');
+        console.log('='.repeat(60));
+
+        // Compile the code
+        const result = await compiler.compileArduinoCode(code, board);
+
+        if (result.success) {
+            console.log('✅ Compilation successful - sending response');
+            res.json(result);
+        } else {
+            console.log('❌ Compilation failed - sending errors');
+            res.status(400).json(result);
+        }
+    } catch (error) {
+        console.error('💥 Server error during compilation:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Internal server error during compilation',
+            message: error.message
+        });
+    }
+});
+
 // DELETE project
+
 app.delete('/api/projects/:id', async (req, res) => {
     try {
         const project = await Project.findByIdAndDelete(req.params.id);

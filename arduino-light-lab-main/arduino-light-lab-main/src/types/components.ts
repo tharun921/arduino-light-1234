@@ -17,7 +17,9 @@ export interface ComponentConfig {
   | "actuators"
   | "communication"
   | "basic"
-  | "boards";
+  | "boards"
+  | "modules"
+  | "chamber";
   description: string;
   pins: ComponentPin[];
   width: number;
