@@ -11,7 +11,7 @@
  * - Compatible with compiled Arduino HEX files
  */
 
-import { AVRTimer, CPU, timer0Config } from 'avr8js';
+import { AVRTimer, CPU, timer0Config, avrInstruction } from 'avr8js';
 import { HardwareAbstractionLayer } from './HardwareAbstractionLayer';
 
 export interface HexSegment {
@@ -67,13 +67,23 @@ export class AVR8jsWrapper {
      */
     loadHex(hexSegments: HexSegment[]): void {
         console.log('📦 Loading HEX into AVR8js...');
+        console.log(`📦 Total segments to load: ${hexSegments.length}`);
 
         // Clear program memory
         this.cpu.progMem.fill(0xFFFF);
 
         // Load each segment
-        for (const segment of hexSegments) {
+        for (let segIdx = 0; segIdx < hexSegments.length; segIdx++) {
+            const segment = hexSegments[segIdx];
             const wordAddress = segment.address / 2;
+
+            // Log first segment details
+            if (segIdx === 0) {
+                console.log(`📦 FIRST SEGMENT DETAILS:`);
+                console.log(`   Address: 0x${segment.address.toString(16)} (word addr: 0x${wordAddress.toString(16)})`);
+                console.log(`   Data length: ${segment.data.length} bytes`);
+                console.log(`   First 16 bytes:`, Array.from(segment.data.slice(0, 16)).map(b => `0x${b.toString(16).padStart(2, '0')}`).join(' '));
+            }
 
             // Convert bytes to 16-bit words (AVR uses 16-bit wide program memory)
             for (let i = 0; i < segment.data.length; i += 2) {
@@ -84,10 +94,20 @@ export class AVR8jsWrapper {
                 if (wordAddress + (i / 2) < this.cpu.progMem.length) {
                     this.cpu.progMem[wordAddress + (i / 2)] = word;
                 }
+
+                // Log first 4 words (reset vector area)
+                if (segIdx === 0 && i < 8) {
+                    console.log(`   Word[${i / 2}] at progMem[0x${(wordAddress + i / 2).toString(16)}] = 0x${word.toString(16).padStart(4, '0')} (bytes: 0x${lowByte.toString(16).padStart(2, '0')} 0x${highByte.toString(16).padStart(2, '0')})`);
+                }
             }
 
             console.log(`   Loaded ${segment.data.length} bytes at address 0x${segment.address.toString(16)}`);
         }
+
+        // Verify reset vector after loading
+        console.log(`📦 RESET VECTOR CHECK:`);
+        console.log(`   progMem[0] = 0x${this.cpu.progMem[0].toString(16).padStart(4, '0')}`);
+        console.log(`   progMem[1] = 0x${this.cpu.progMem[1].toString(16).padStart(4, '0')}`);
 
         this.reset();
         console.log('✅ HEX loaded successfully');
@@ -108,12 +128,22 @@ export class AVR8jsWrapper {
     /**
      * Execute one CPU instruction
      */
+    private stepDebugCount = 0;
     step(): boolean {
         if (!this.running) return false;
 
         try {
-            // Execute one instruction
-            this.cpu.tick();
+            // Log PC and instruction periodically
+            this.stepDebugCount++;
+            if (this.stepDebugCount <= 5 || this.stepDebugCount % 1000 === 0) {
+                const pc = this.cpu.pc;
+                const instruction = this.cpu.progMem[pc];
+                console.log(`🔍 Step ${this.stepDebugCount}: PC=0x${pc.toString(16)}, Instruction=0x${instruction.toString(16)}`);
+            }
+
+            // CRITICAL: Execute the instruction FIRST, then tick for timing
+            avrInstruction(this.cpu);  // This actually executes the instruction and advances PC
+            this.cpu.tick();            // This handles timing, interrupts, and peripherals
             this.cycleCount++;
 
             // Check for port changes and notify HAL
@@ -141,6 +171,11 @@ export class AVR8jsWrapper {
             }
         }
 
+        // Log periodically for debugging (every ~100k cycles)
+        if (this.cycleCount % 100000 === 0 && this.cycleCount > 0) {
+            console.log(`🔄 AVR8.js: ${this.cycleCount} cycles executed, PC=0x${this.cpu.pc.toString(16)}`);
+        }
+
         return executed;
     }
 
@@ -150,6 +185,8 @@ export class AVR8jsWrapper {
     start(): void {
         this.running = true;
         console.log('▶️ AVR8js execution started');
+        console.log(`   Running: ${this.running}`);
+        console.log(`   Program Counter (PC): 0x${this.cpu.pc.toString(16)}`);
     }
 
     /**
@@ -164,26 +201,43 @@ export class AVR8jsWrapper {
      * Check for port changes and notify HAL
      * This bridges AVR8js port changes to the Hardware Abstraction Layer
      */
-    private checkPortChanges(): void {
+    private checkCount = 0; // Counter for periodic logging
+    public checkPortChanges(): void {
+        this.checkCount++;
+
         // Read current port values from AVR8js data memory
         const currentPortB = this.cpu.data[this.PORTB];
         const currentPortC = this.cpu.data[this.PORTC];
         const currentPortD = this.cpu.data[this.PORTD];
 
+        // Log port states every 300 checks (~5 seconds at 60 FPS)
+        if (this.checkCount % 300 === 0) {
+            console.log(`📊 PORT SNAPSHOT (check ${this.checkCount}):`);
+            console.log(`   PORTB: 0x${currentPortB.toString(16).padStart(2, '0')} (binary: ${currentPortB.toString(2).padStart(8, '0')}) - Pin 13 is bit 5`);
+            console.log(`   PORTC: 0x${currentPortC.toString(16).padStart(2, '0')} (binary: ${currentPortC.toString(2).padStart(8, '0')})`);
+            console.log(`   PORTD: 0x${currentPortD.toString(16).padStart(2, '0')} (binary: ${currentPortD.toString(2).padStart(8, '0')})`);
+            console.log(`   CPU PC: 0x${this.cpu.pc.toString(16)} | Running: ${this.running}`);
+        }
+
         // Check PORTB changes (Digital pins 8-13)
         if (currentPortB !== this.prevPortB) {
+            const pin13Before = (this.prevPortB >> 5) & 1;
+            const pin13After = (currentPortB >> 5) & 1;
+            console.log(`🔌 PORTB changed: 0x${this.prevPortB.toString(16)} → 0x${currentPortB.toString(16)} (Pin 13: ${pin13Before} → ${pin13After})`);
             this.hal.writePort(0x05, currentPortB); // 0x05 = PORTB I/O address
             this.prevPortB = currentPortB;
         }
 
         // Check PORTC changes (Analog pins A0-A5)
         if (currentPortC !== this.prevPortC) {
+            console.log(`🔌 PORTC changed: 0x${this.prevPortC.toString(16)} → 0x${currentPortC.toString(16)}`);
             this.hal.writePort(0x08, currentPortC); // 0x08 = PORTC I/O address
             this.prevPortC = currentPortC;
         }
 
         // Check PORTD changes (Digital pins 0-7)
         if (currentPortD !== this.prevPortD) {
+            console.log(`🔌 PORTD changed: 0x${this.prevPortD.toString(16)} → 0x${currentPortD.toString(16)}`);
             this.hal.writePort(0x0B, currentPortD); // 0x0B = PORTD I/O address
             this.prevPortD = currentPortD;
         }
@@ -231,7 +285,7 @@ export class AVR8jsWrapper {
     getState() {
         return {
             pc: this.cpu.pc,
-            sp: this.cpu.sp,
+            sp: this.cpu.SP,  // AVR8.js uses uppercase SP
             cycles: this.cycleCount,
             running: this.running,
             portB: this.cpu.data[this.PORTB],

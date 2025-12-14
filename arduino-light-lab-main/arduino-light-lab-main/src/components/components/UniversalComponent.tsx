@@ -148,11 +148,37 @@ export const UniversalComponent = ({
             {isSimulating && (
               <div className="absolute top-1 right-1 flex items-center gap-1">
                 <div
-                  className={`w-4 h-4 rounded-full border-2 border-white shadow-md ${pinState ? "bg-green-500 animate-pulse" : "bg-red-500"
+                  className={`w-4 h-4 rounded-full border-2 border-white shadow-md ${
+                    // For sensors: show ON if simulation is running (they produce data)
+                    (component.id.includes("hc-sr04") ||
+                      component.id.includes("ultrasonic") ||
+                      component.id.includes("dht") ||
+                      component.id.includes("sensor") ||
+                      component.id.includes("mq") ||
+                      component.id.includes("lcd"))
+                      ? "bg-green-500 animate-pulse"
+                      // For Arduino: show ON if simulation is running
+                      : component.id.includes("arduino")
+                        ? "bg-green-500 animate-pulse"
+                        // For other components: use pinState
+                        : pinState
+                          ? "bg-green-500 animate-pulse"
+                          : "bg-red-500"
                     }`}
                 />
                 <div className="text-xs font-bold text-white bg-black px-1 rounded">
-                  {pinState ? "ON" : "OFF"}
+                  {/* Sensors, LCD, and Arduino always ON when simulating, others use pinState */}
+                  {(component.id.includes("hc-sr04") ||
+                    component.id.includes("ultrasonic") ||
+                    component.id.includes("dht") ||
+                    component.id.includes("sensor") ||
+                    component.id.includes("mq") ||
+                    component.id.includes("lcd") ||
+                    component.id.includes("arduino"))
+                    ? "ON"
+                    : pinState
+                      ? "ON"
+                      : "OFF"}
                 </div>
               </div>
             )}

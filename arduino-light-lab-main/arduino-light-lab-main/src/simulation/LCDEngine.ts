@@ -104,16 +104,17 @@ class LCDInstance {
         const d6 = this.state.pinStates[this.pins.d6] || 0;
         const d7 = this.state.pinStates[this.pins.d7] || 0;
 
-        // Assemble nibble from D7-D4
+        // Assemble nibble from D4-D7 (D4=bit0, D5=bit1, D6=bit2, D7=bit3)
         const nibble = (d7 << 3) | (d6 << 2) | (d5 << 1) | d4;
 
         // 4-bit mode: Need 2 nibbles to make a byte
         if (this.state.expectingHighNibble) {
-            // First nibble (high 4 bits)
+            // First nibble (HIGH 4 bits) - Arduino LiquidCrystal sends high nibble first
             this.state.pendingNibble = nibble;
             this.state.expectingHighNibble = false;
+            return;
         } else {
-            // Second nibble (low 4 bits) - complete the byte
+            // Second nibble (LOW 4 bits) - complete the byte
             if (this.state.pendingNibble !== null) {
                 const fullByte = (this.state.pendingNibble << 4) | nibble;
 
@@ -146,6 +147,8 @@ class LCDInstance {
             this.state.cursorRow = 0;
             this.state.cursorCol = 0;
             this.state.ddramAddress = 0;
+            this.state.pendingNibble = null;
+            this.state.expectingHighNibble = true;
             console.log('  → Clear Display');
         }
 
@@ -154,6 +157,8 @@ class LCDInstance {
             this.state.cursorRow = 0;
             this.state.cursorCol = 0;
             this.state.ddramAddress = 0;
+            this.state.pendingNibble = null;
+            this.state.expectingHighNibble = true;
             console.log('  → Return Home');
         }
 
@@ -195,34 +200,45 @@ class LCDInstance {
 
         console.log(`📺 LCD Write: '${char}' (0x${data.toString(16).toUpperCase()}) at [${this.state.cursorRow}, ${this.state.cursorCol}]`);
 
-        // Advance cursor
-        this.state.cursorCol++;
+        // Advance DDRAM address
         this.state.ddramAddress++;
 
-        // Wrap cursor if needed
-        if (this.state.cursorCol >= 16) {
-            this.state.cursorCol = 0;
-            // In real LCD, it would wrap to next line's DDRAM address
+        // Correct HD44780 line wrapping
+        if (this.state.ddramAddress === 0x10) {
+            this.state.ddramAddress = 0x40; // move to line 2
+        }
+        else if (this.state.ddramAddress === 0x50) {
+            this.state.ddramAddress = 0x00; // wrap back to line 1
         }
 
         this.updateCursorFromAddress();
     }
 
+
+
+
+
     /**
      * Map DDRAM address to cursor position (HD44780 memory layout)
+     * Handles all address ranges with proper modulo wrapping
      */
     private updateCursorFromAddress(): void {
-        // Line 1: 0x00 - 0x0F
-        // Line 2: 0x40 - 0x4F
-        if (this.state.ddramAddress >= 0x40 && this.state.ddramAddress < 0x50) {
+        // Line 1: 0x00 - 0x0F (raw), 0x10-0x3F (wrapped with modulo)
+        // Line 2: 0x40 - 0x4F (raw), 0x50-0x7F (wrapped with modulo)
+
+        const addr = this.state.ddramAddress;
+
+        if (addr >= 0x40) {
+            // Line 2: addresses 0x40-0x7F map to row 1
             this.state.cursorRow = 1;
-            this.state.cursorCol = this.state.ddramAddress - 0x40;
-        } else if (this.state.ddramAddress < 0x10) {
+            this.state.cursorCol = (addr - 0x40) % 16; // Wrap at column 16
+        } else {
+            // Line 1: addresses 0x00-0x3F map to row 0
             this.state.cursorRow = 0;
-            this.state.cursorCol = this.state.ddramAddress;
+            this.state.cursorCol = addr % 16; // Wrap at column 16
         }
 
-        // Clamp cursor
+        // Clamp cursor to valid range
         this.state.cursorRow = Math.max(0, Math.min(1, this.state.cursorRow));
         this.state.cursorCol = Math.max(0, Math.min(15, this.state.cursorCol));
     }

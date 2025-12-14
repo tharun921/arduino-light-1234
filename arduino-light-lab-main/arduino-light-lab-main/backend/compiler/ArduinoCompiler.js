@@ -85,6 +85,12 @@ class ArduinoCompiler {
             // Write sketch file
             fs.writeFileSync(sketchFile, code, 'utf8');
             console.log(`📄 Created sketch file: ${sketchFile}`);
+            console.log('\n🔍 EXACT CODE RECEIVED:');
+            console.log('═══════════════════════════════════════');
+            code.split('\n').forEach((line, i) => {
+                console.log(`Line ${i + 1}: "${line}"`);
+            });
+            console.log('═══════════════════════════════════════\n');
 
             // Compile the sketch with explicit build path
             console.log('🔧 Running arduino-cli compile...');
@@ -210,7 +216,8 @@ class ArduinoCompiler {
                 for (let i = 0; i < byteCount; i++) {
                     data[i] = parseInt(line.substr(9 + i * 2, 2), 16);
                 }
-                segments.push({ address, data });
+                // ✅ FIX: Convert Uint8Array to regular array for JSON serialization
+                segments.push({ address, data: Array.from(data) });
             } else if (recordType === 0x01) {
                 // End of file
                 break;

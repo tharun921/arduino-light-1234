@@ -233,6 +233,13 @@ app.post('/api/compile', async (req, res) => {
     }
 });
 
+// ============== LIBRARY MANAGER ROUTES ==============
+
+const libraryRoutes = require('./routes/libraries');
+app.use('/api/libraries', libraryRoutes);
+
+// ============== PROJECT MANAGEMENT ==============
+
 // DELETE project
 
 app.delete('/api/projects/:id', async (req, res) => {

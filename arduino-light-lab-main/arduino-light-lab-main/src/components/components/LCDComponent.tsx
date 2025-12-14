@@ -63,6 +63,8 @@ const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0, lcdText
                 fontFamily="monospace"
                 fontWeight="bold"
                 letterSpacing="1"
+                xmlSpace="preserve"
+                style={{ whiteSpace: 'pre' }}
             >
                 {line1}
             </text>
@@ -76,6 +78,8 @@ const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0, lcdText
                 fontFamily="monospace"
                 fontWeight="bold"
                 letterSpacing="1"
+                xmlSpace="preserve"
+                style={{ whiteSpace: 'pre' }}
             >
                 {line2}
             </text>

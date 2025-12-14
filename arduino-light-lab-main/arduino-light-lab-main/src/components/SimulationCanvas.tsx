@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { Button } from "./ui/button";
-import { Plus, Play, Square, Code, Trash2, RotateCw, Download, MoreVertical, X } from "lucide-react";
+import { Plus, Play, Square, Code, Trash2, RotateCw, Download, MoreVertical, X, Library } from "lucide-react";
 import { ComponentLibrary } from "./ComponentLibrary";
+import { LibraryManager } from "./LibraryManager";
 import { CodeEditor } from "./CodeEditor";
 import { DebugConsole, DebugLog } from "./DebugConsole";
 import { getUltrasonicEngine } from "../simulation/UltrasonicEngine";
@@ -15,6 +16,7 @@ import { COMPONENT_DATA } from "@/config/componentsData";
 import { saveProject, getAllProjects, loadProject, deleteProject, type Project } from "@/utils/projectStorage";
 import { AVREmulator, type HexSegment } from "../emulator/AVREmulator";
 import { HardwareAbstractionLayer } from "../emulator/HardwareAbstractionLayer";
+import { AVR8jsWrapper } from "../emulator/AVR8jsWrapper";
 
 
 interface Wire {
@@ -40,6 +42,7 @@ interface PinConnection {
 export const SimulationCanvas = () => {
   const [isSimulating, setIsSimulating] = useState(false);
   const [showLibrary, setShowLibrary] = useState(false);
+  const [showLibraryManager, setShowLibraryManager] = useState(false);
   const [showCodeEditor, setShowCodeEditor] = useState(false);
   const [placedComponents, setPlacedComponents] = useState<PlacedComponent[]>(
     [],
@@ -94,8 +97,10 @@ export const SimulationCanvas = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // Compiler Mode state
-  const [useCompilerMode, setUseCompilerMode] = useState(false); // Toggle between regex and compiler
+  const [useCompilerMode, setUseCompilerMode] = useState(true); // Toggle between regex and compiler
+  const [useAVR8js, setUseAVR8js] = useState(true); // Use AVR8.js (true) or custom emulator (false)
   const [avrEmulator, setAvrEmulator] = useState<AVREmulator | null>(null);
+  const [avr8jsEmulator, setAvr8jsEmulator] = useState<AVR8jsWrapper | null>(null);
   const [emulatorRunning, setEmulatorRunning] = useState(false);
   const emulatorIntervalRef = useRef<number | null>(null);
 
@@ -473,6 +478,123 @@ export const SimulationCanvas = () => {
       console.log(`✅ LCD registered with engine:`, lcdPinConfig);
     });
   };
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 📡 ULTRASONIC SENSOR ENGINE INTEGRATION
+  // ═══════════════════════════════════════════════════════════════════
+  /**
+   * Registers Ultrasonic sensors (HC-SR04) with the Ultrasonic engine
+   * Maps TRIG and ECHO pins to Arduino pin numbers via wire connections
+   */
+  const registerUltrasonicComponents = () => {
+    console.log("📡 Registering Ultrasonic sensors with engine...");
+
+    const ultrasonicEngine = getUltrasonicEngine();
+    const ultrasonicComponents = placedComponents.filter(c => c.id.includes("hc-sr04"));
+
+    if (ultrasonicComponents.length === 0) {
+      console.log("  No Ultrasonic sensors found");
+      return;
+    }
+
+    ultrasonicComponents.forEach(sensor => {
+      console.log(`📡 Processing ${sensor.name} (${sensor.instanceId})`);
+
+      // Find all wires connected to this sensor
+      const sensorWires = wires.filter(wire =>
+        wire.startPinId.startsWith(sensor.instanceId) ||
+        wire.endPinId.startsWith(sensor.instanceId)
+      );
+
+      if (sensorWires.length === 0) {
+        console.log("  No wires connected to sensor");
+        return;
+      }
+
+      // Map sensor pins to Arduino pins
+      const pinMapping: Record<string, number> = {};
+      let hasGnd = false;
+      let hasVcc = false;
+
+      sensorWires.forEach(wire => {
+        // Determine which end is the sensor
+        const sensorPinId = wire.startPinId.startsWith(sensor.instanceId)
+          ? wire.startPinId
+          : wire.endPinId;
+
+        const arduinoPinId = wire.startPinId.includes("arduino-uno")
+          ? wire.startPinId
+          : wire.endPinId.includes("arduino-uno")
+            ? wire.endPinId
+            : null;
+
+        // Extract sensor pin name (e.g., "trig", "echo", "gnd", "vcc")
+        const sensorPinName = sensorPinId.split("-").pop();
+
+        // Check for power pins
+        if (sensorPinName === 'gnd') {
+          hasGnd = true;
+          console.log(`  ✓ Found GND connection`);
+        }
+        if (sensorPinName === 'vcc') {
+          hasVcc = true;
+          console.log(`  ✓ Found VCC connection`);
+        }
+
+        if (!arduinoPinId) return;
+
+        // Extract Arduino pin number
+        const arduinoPinStr = extractArduinoPinNumber(arduinoPinId);
+
+        if (!sensorPinName || !arduinoPinStr) return;
+
+        // Convert Arduino pin string to number
+        const arduinoPinNum = parseInt(arduinoPinStr, 10);
+
+        if (isNaN(arduinoPinNum)) return;
+
+        pinMapping[sensorPinName] = arduinoPinNum;
+        console.log(`  Mapped Sensor ${sensorPinName.toUpperCase()} → Arduino Pin ${arduinoPinNum}`);
+      });
+
+      // ⚡ POWER VALIDATION
+      if (!hasGnd || !hasVcc) {
+        const missing = [];
+        if (!hasGnd) missing.push('GND');
+        if (!hasVcc) missing.push('VCC');
+
+        console.error(`\n${'='.repeat(50)}`);
+        console.error(`❌ ULTRASONIC POWER ERROR: ${sensor.name}`);
+        console.error(`   Missing: ${missing.join(' and ')}`);
+        console.error(`   Real sensors cannot work without power!`);
+        console.error(`   Please connect both GND and VCC pins.`);
+        console.error('='.repeat(50) + '\n');
+
+        toast.error(`Ultrasonic Error: Connect ${missing.join(' and ')} for power`, { duration: 5000 });
+        addDebugLog('error', `Ultrasonic missing power: ${missing.join(', ')}`);
+        return;
+      }
+
+      // Check if we have required pins (TRIG, ECHO)
+      if (!pinMapping.trig || !pinMapping.echo) {
+        const missing = [];
+        if (!pinMapping.trig) missing.push('TRIG');
+        if (!pinMapping.echo) missing.push('ECHO');
+        console.warn(`  ⚠️ Sensor missing pins: ${missing.join(", ")}`);
+        console.warn(`  ⚠️ Sensor will not be registered`);
+        return;
+      }
+
+      // Register with Ultrasonic engine
+      ultrasonicEngine.registerSensor(
+        sensor.instanceId,
+        pinMapping.trig,
+        pinMapping.echo
+      );
+      console.log(`✅ Ultrasonic sensor registered: TRIG=${pinMapping.trig}, ECHO=${pinMapping.echo}`);
+    });
+  };
+
 
   // ═══════════════════════════════════════════════════════════════════
   // 💧 TURBIDITY ENGINE INTEGRATION
@@ -1082,6 +1204,7 @@ export const SimulationCanvas = () => {
       setTimeout(() => {
         updatePinConnections();
         registerLCDComponents();  // Register LCDs with engine
+        registerUltrasonicComponents();  // Register Ultrasonic sensors with engine
       }, 100);
 
       // If simulation is active, update the circuit state
@@ -1813,16 +1936,25 @@ export const SimulationCanvas = () => {
    */
   const executeCodeWithCompiler = async (code: string) => {
     try {
-      console.log('🔨 Compiler Mode: Starting compilation...');
+      console.log('⚙️ --- COMPILATION START ---');
+      console.log('📋 Using:', useAVR8js ? 'AVR8.js (Real AVR Emulation)' : 'Custom Emulator');
       addDebugLog('info', 'Compiling with Arduino CLI...');
 
+      console.log('🌐 Fetching from backend: http://localhost:3001/api/compile');
       const response = await fetch('http://localhost:3001/api/compile', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ code, board: 'arduino:avr:uno' })
       });
 
+      console.log('📡 Backend response status:', response.status, response.statusText);
+      console.log('📡 Response OK:', response.ok);
+      console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+      console.log('📡 About to parse JSON...');
+
       const result = await response.json();
+      console.log('📦 Backend result:', result);
+      console.log('📦 Result keys:', Object.keys(result));
 
       if (!result.success) {
         console.error('❌ Compilation failed:', result.errors);
@@ -1835,37 +1967,83 @@ export const SimulationCanvas = () => {
       console.log('✅ Compilation successful!');
       addDebugLog('info', 'Compilation successful!');
 
+      // Create Hardware Abstraction Layer
       const hal = new HardwareAbstractionLayer();
       hal.onPinChange((pin: number, value: 0 | 1) => {
+        console.log(`🔌 HAL PIN CHANGE: Pin ${pin} = ${value ? 'HIGH' : 'LOW'}`);
         setCompiledCode(prev => ({
           ...prev,
           pinStates: { ...prev.pinStates, [pin.toString()]: value }
         }));
         getLCDEngine().onPinChange(pin, value, Date.now());
+        getUltrasonicEngine().onPinChange(pin, value, Date.now());
+        getTurbidityEngine().onPinChange(pin, value, Date.now());
         setForceUpdate(prev => prev + 1);
       });
 
-      const emulator = new AVREmulator(hal);
-      emulator.loadHex(result.binaryData as HexSegment[]);
-      setAvrEmulator(emulator);
+      if (useAVR8js) {
+        // Use AVR8.js for accurate emulation
+        console.log('🎮 Initializing AVR8.js emulator...');
+        const emulator = new AVR8jsWrapper(hal);
+        console.log('📦 Loading HEX with', result.binaryData?.length || 0, 'segments...');
+        console.log('🔍 First segment sample:', result.binaryData?.[0]);
+        console.log('🔍 First segment data type:', Array.isArray(result.binaryData?.[0]?.data) ? 'Array' : typeof result.binaryData?.[0]?.data);
+        console.log('🔍 First segment data length:', result.binaryData?.[0]?.data?.length);
+        emulator.loadHex(result.binaryData as HexSegment[]);
+        console.log('▶️ Starting AVR8.js CPU...');
+        emulator.start();
+        setAvr8jsEmulator(emulator);
 
-      toast.success('✅ Code compiled and loaded!');
-      setIsCodeUploaded(true);
-      startEmulatorLoop(emulator);
+        toast.success('✅ Code compiled with AVR8.js!');
+        setIsCodeUploaded(true);
+        console.log('🔄 Starting AVR8.js execution loop...');
+        startAVR8jsLoop(emulator);
+        console.log('✅ --- COMPILATION COMPLETE ---');
+      } else {
+        // Use custom emulator (fallback)
+        console.log('🔧 Initializing custom AVR emulator...');
+        const emulator = new AVREmulator(hal);
+        emulator.loadHex(result.binaryData as HexSegment[]);
+        setAvrEmulator(emulator);
+
+        toast.success('✅ Code compiled with custom emulator!');
+        setIsCodeUploaded(true);
+        startEmulatorLoop(emulator);
+      }
 
     } catch (error: any) {
-      console.error('💥 Compiler error:', error);
+      console.error('💥 Compiler error caught:', error);
+      console.error('💥 Error name:', error.name);
+      console.error('💥 Error message:', error.message);
+      console.error('💥 Error stack:', error.stack);
+
       if (error.message?.includes('fetch')) {
-        console.warn('⚠️ Backend unavailable, using simple mode');
+        console.warn('⚠️ Backend unavailable - using simple mode');
         toast.warning('Backend unavailable, using simple mode');
         executeCode(code);
       } else {
-        toast.error('Compilation failed!');
+        toast.error(`Compilation failed: ${error.message}`);
       }
       setIsCodeUploaded(false);
     }
   };
 
+  // Add this function after executeCodeWithCompiler (around line 1890)
+  // This function chooses between real and simple compilation modes
+  /**
+   * Unified upload handler - chooses between compiler modes
+   */
+  const handleUploadCode = (code: string) => {
+    if (useCompilerMode) {
+      // Use real Arduino CLI + AVR8.js compilation
+      console.log('📤 Using real compiler mode (Arduino CLI + AVR8.js)');
+      executeCodeWithCompiler(code);
+    } else {
+      // Use regex-based simple compilation
+      console.log('📤 Using simple mode (regex-based)');
+      executeCode(code);
+    }
+  };
   const startEmulatorLoop = (emulator: AVREmulator) => {
     if (emulatorIntervalRef.current) clearInterval(emulatorIntervalRef.current);
     setEmulatorRunning(true);
@@ -1878,6 +2056,57 @@ export const SimulationCanvas = () => {
   };
 
   const stopEmulatorLoop = () => {
+    if (emulatorIntervalRef.current) {
+      clearInterval(emulatorIntervalRef.current);
+      emulatorIntervalRef.current = null;
+    }
+    setEmulatorRunning(false);
+  };
+
+  // AVR8.js emulator loop (runs at ~60 FPS, executes 16MHz / 60 = ~266k cycles per frame)
+  const startAVR8jsLoop = (emulator: AVR8jsWrapper) => {
+    console.log('🚀 startAVR8jsLoop() CALLED');
+    console.log(`   Emulator exists: ${!!emulator}`);
+
+    if (emulatorIntervalRef.current) clearInterval(emulatorIntervalRef.current);
+    setEmulatorRunning(true);
+
+    // Run at 60 FPS, execute proportional CPU cycles for 16 MHz
+    const CYCLES_PER_FRAME = Math.floor(16000000 / 60);
+    console.log(`   Cycles per frame: ${CYCLES_PER_FRAME}`);
+
+    let frameCount = 0;
+    emulatorIntervalRef.current = window.setInterval(() => {
+      frameCount++;
+      if (frameCount % 60 === 0) {
+        console.log(`⏱️ AVR8.js interval executing (frame ${frameCount})`);
+      }
+
+      if (emulator) {
+        const executed = emulator.run(CYCLES_PER_FRAME);
+        if (frameCount <= 3) {
+          console.log(`   Frame ${frameCount}: Executed ${executed} cycles`);
+        }
+
+        // ✨ CRITICAL: Check for port changes to detect digitalWrite()!
+        emulator.checkPortChanges();
+
+        if (executed === 0) {
+          console.log('❌ Emulator returned 0 cycles - stopping');
+          stopAVR8jsLoop();
+        }
+      } else {
+        console.log('❌ Emulator is null in interval!');
+      }
+    }, 16); // ~60 FPS
+
+    console.log(`✅ AVR8.js interval started (ID: ${emulatorIntervalRef.current})`);
+  };
+
+  const stopAVR8jsLoop = () => {
+    if (avr8jsEmulator) {
+      avr8jsEmulator.stop();
+    }
     if (emulatorIntervalRef.current) {
       clearInterval(emulatorIntervalRef.current);
       emulatorIntervalRef.current = null;
@@ -2702,6 +2931,15 @@ export const SimulationCanvas = () => {
         </Button>
         <Button
           size="icon"
+          variant="outline"
+          className="h-12 w-12 rounded-full"
+          onClick={() => setShowLibraryManager(true)}
+          title="Arduino Libraries"
+        >
+          <Library className="h-5 w-5" />
+        </Button>
+        <Button
+          size="icon"
           variant="secondary"
           className="h-12 w-12 rounded-full"
           onClick={clearAllWires}
@@ -2746,6 +2984,7 @@ export const SimulationCanvas = () => {
         >
           <RotateCw className="h-5 w-5" />
         </Button>
+        {/* Code Editor Button */}
         <Button
           size="icon"
           variant={showCodeEditor ? "default" : "secondary"}
@@ -2754,6 +2993,22 @@ export const SimulationCanvas = () => {
           title="Code Editor"
         >
           <Code className="h-5 w-5" />
+        </Button>
+
+        {/* 🧪 TEST BUTTON - Direct Upload */}
+        <Button
+          size="icon"
+          variant="secondary"
+          className="h-12 w-12 rounded-full bg-yellow-500 hover:bg-yellow-600 text-white border-2 border-yellow-300"
+          onClick={() => {
+            const testCode = `void setup() {\n  pinMode(13, OUTPUT);\n  digitalWrite(13, HIGH);\n}\n\nvoid loop() {\n}\n`;
+            console.log('🧪 TEST BUTTON: Uploading hardcoded code...');
+            console.log('Code:', testCode);
+            handleUploadCode(testCode);
+          }}
+          title="🧪 TEST: Upload LED On Code"
+        >
+          <span className="text-xl font-bold">🧪</span>
         </Button>
         <Button
           size="icon"
@@ -3407,10 +3662,16 @@ export const SimulationCanvas = () => {
                 <p className="text-muted-foreground mb-4">
                   Click the + button to add components from the library
                 </p>
-                <Button onClick={() => setShowLibrary(true)}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  Open Component Library
-                </Button>
+                <div className="flex gap-2">
+                  <Button onClick={() => setShowLibrary(true)}>
+                    <Plus className="h-4 w-4 mr-2" />
+                    Open Component Library
+                  </Button>
+                  <Button onClick={() => setShowLibraryManager(true)} variant="outline">
+                    <Library className="h-4 w-4 mr-2" />
+                    Libraries
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -3424,6 +3685,12 @@ export const SimulationCanvas = () => {
           />
         )}
 
+        {/* Library Manager Modal */}
+        <LibraryManager
+          isOpen={showLibraryManager}
+          onClose={() => setShowLibraryManager(false)}
+        />
+
         {/* Code Editor Sidebar */}
         {showCodeEditor && (
           <CodeEditor
@@ -3431,12 +3698,12 @@ export const SimulationCanvas = () => {
             onClose={() => setShowCodeEditor(false)}
             onCompile={(code) => {
               setCurrentCode(code);
-              executeCode(code);
+              handleUploadCode(code);
               toast.success("Code compiled and ready to upload!");
             }}
             onCodeChange={(code) => {
               setCurrentCode(code);
-              executeCode(code);
+              handleUploadCode(code);
             }}
           />
         )}

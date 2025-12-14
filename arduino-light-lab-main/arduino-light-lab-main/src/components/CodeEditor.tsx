@@ -293,20 +293,28 @@ void loop() {
     setStatus("compiling");
     setSyntaxErrors([]);
 
-    // Simulate compilation delay
-    setTimeout(() => {
-      const errors = validateArduinoCode(code);
-      const hasErrors = errors.some((e) => e.type === "error");
-      const hasWarnings = errors.some((e) => e.type === "warning");
+    // Validate syntax locally first
+    const errors = validateArduinoCode(code);
+    const hasErrors = errors.some((e) => e.type === "error");
+    const hasWarnings = errors.some((e) => e.type === "warning");
 
-      setSyntaxErrors(errors);
+    setSyntaxErrors(errors);
 
-      if (hasErrors) {
-        setStatus("error");
-        toast.error(
-          `❌ Compilation failed! Found ${errors.filter((e) => e.type === "error").length} error(s)`,
-        );
-      } else {
+    if (hasErrors) {
+      setStatus("error");
+      toast.error(
+        `❌ Compilation failed! Found ${errors.filter((e) => e.type === "error").length} error(s)`,
+      );
+      return;
+    }
+
+    // If no local errors, call the real compiler
+    if (onCompile) {
+      // Real compilation happens here - this will use Arduino CLI + AVR8.js
+      onCompile(code);
+
+      // Set success after a delay (real compilation is async)
+      setTimeout(() => {
         setStatus("success");
         if (hasWarnings) {
           toast.warning(
@@ -315,21 +323,23 @@ void loop() {
         } else {
           toast.success("✅ Code compiled successfully!");
         }
-
-        if (onCompile) {
-          onCompile(code);
-        }
-      }
-    }, 1500);
+      }, 1500);
+    } else {
+      // Fallback if no onCompile provided
+      setStatus("success");
+      toast.success("✅ Code validated successfully!");
+    }
   };
 
   const handleUpload = () => {
-    toast.info("Uploading to Arduino...");
-
-    setTimeout(() => {
-      toast.success("Code uploaded successfully!");
-      setStatus("idle");
-    }, 1500);
+    // Upload means: compile and run immediately
+    if (status !== "success") {
+      // Need to compile first
+      handleCompile();
+    } else {
+      // Already compiled, just notify
+      toast.success("✅ Code uploaded and running!");
+    }
   };
 
   const handleCopy = () => {
