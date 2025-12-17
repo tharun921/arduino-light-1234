@@ -95,10 +95,16 @@ class ArduinoCompiler {
             // Compile the sketch with explicit build path
             console.log('🔧 Running arduino-cli compile...');
             const buildPath = path.join(projectDir, 'build');
+
+            // ✅ FIX: Use proper command execution with explicit shell
             const compileCommand = `arduino-cli compile --fqbn ${board} --build-path "${buildPath}" "${projectDir}"`;
 
+            console.log('📝 Compile command:', compileCommand);
+
+            // Execute with explicit shell for Windows compatibility
             const { stdout, stderr } = await execPromise(compileCommand, {
-                maxBuffer: 10 * 1024 * 1024 // 10MB buffer for large compilation outputs
+                maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large compilation outputs
+                shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/sh'
             });
 
             console.log('✅ Compilation successful!');

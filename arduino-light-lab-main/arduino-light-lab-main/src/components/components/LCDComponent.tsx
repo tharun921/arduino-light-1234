@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface LCDComponentProps {
     x: number;
@@ -7,12 +7,39 @@ interface LCDComponentProps {
     lcdText?: {
         line1: string;
         line2: string;
+        cursorRow?: number;
+        cursorCol?: number;
+        cursorVisible?: boolean;
+        blinkEnabled?: boolean;
     };
 }
 
 const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0, lcdText }) => {
     const line1 = lcdText?.line1 || '';
     const line2 = lcdText?.line2 || '';
+    const cursorRow = lcdText?.cursorRow ?? 0;
+    const cursorCol = lcdText?.cursorCol ?? 0;
+    const cursorVisible = lcdText?.cursorVisible ?? false;
+    const blinkEnabled = lcdText?.blinkEnabled ?? false;
+
+    // Blinking state (500ms interval)
+    const [blinkState, setBlinkState] = useState(true);
+
+    useEffect(() => {
+        if (blinkEnabled) {
+            const interval = setInterval(() => {
+                setBlinkState(prev => !prev);
+            }, 500);
+            return () => clearInterval(interval);
+        } else {
+            setBlinkState(true);
+        }
+    }, [blinkEnabled]);
+
+    // Calculate cursor position
+    const charWidth = 9.25; // Approximate character width with letterSpacing
+    const cursorX = 20 + cursorCol * charWidth;
+    const cursorY = cursorRow === 0 ? 32 : 47;
 
     return (
         <g transform={`translate(${x}, ${y}) rotate(${rotation})`}>
@@ -83,6 +110,18 @@ const LCDComponent: React.FC<LCDComponentProps> = ({ x, y, rotation = 0, lcdText
             >
                 {line2}
             </text>
+
+            {/* Cursor rendering - ✅ FIX: Don't render if scrolled off-screen (cursorCol === -1) */}
+            {cursorVisible && cursorCol >= 0 && (!blinkEnabled || blinkState) && (
+                <rect
+                    x={cursorX}
+                    y={cursorY + 2}
+                    width={charWidth - 1}
+                    height="2"
+                    fill="#000000"
+                    opacity="0.8"
+                />
+            )}
 
             {/* Mounting holes */}
             <circle cx="8" cy="8" r="3" fill="#1a5f1f" />

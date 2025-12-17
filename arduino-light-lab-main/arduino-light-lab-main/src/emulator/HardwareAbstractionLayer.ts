@@ -15,6 +15,7 @@ export interface PinChangeCallback {
 export class HardwareAbstractionLayer {
     private pinStates: Map<number, 0 | 1> = new Map();
     private pinModes: Map<number, 'INPUT' | 'OUTPUT'> = new Map();
+    private analogValues: Map<number, number> = new Map(); // Analog pin voltages (A0-A5 = pins 14-19)
     private pinChangeCallbacks: PinChangeCallback[] = [];
 
     // AVR I/O Register Addresses (ATmega328P)
@@ -170,6 +171,23 @@ export class HardwareAbstractionLayer {
         this.pinStates.set(pin, value);
     }
 
+    /**
+     * Set analog pin value (for analog sensors)
+     * @param pin - Arduino pin (14-19 for A0-A5)
+     * @param voltage - Voltage value (0.0 to 5.0V)
+     */
+    setAnalogValue(pin: number, voltage: number): void {
+        this.analogValues.set(pin, voltage);
+    }
+
+    /**
+     * Get analog pin value
+     * @param pin - Arduino pin (14-19 for A0-A5)
+     * @returns Voltage value (0.0 to 5.0V)
+     */
+    getAnalogValue(pin: number): number {
+        return this.analogValues.get(pin) || 0;
+    }
     /**
      * Get current pin state
      */

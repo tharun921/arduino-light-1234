@@ -34,7 +34,7 @@ export class LCDHardwareSimulator {
      */
     private sendNibble(nibble: number): void {
         const lcdEngine = getLCDEngine();
-        const timestamp = Date.now();
+        const timestamp = performance.now(); // ✅ FIX: Use performance.now() for consistent timing
 
         // Set data pins D4-D7 based on nibble bits
         lcdEngine.onPinChange(this.pins.d4, ((nibble >> 0) & 1) as 0 | 1, timestamp);
@@ -43,8 +43,9 @@ export class LCDHardwareSimulator {
         lcdEngine.onPinChange(this.pins.d7, ((nibble >> 3) & 1) as 0 | 1, timestamp);
 
         // Pulse EN pin (high then low) to clock the data
+        // ✅ FIX: 0.1ms (100µs) matches HD44780 timing spec
         lcdEngine.onPinChange(this.pins.en, 1, timestamp);
-        lcdEngine.onPinChange(this.pins.en, 0, timestamp + 1);
+        lcdEngine.onPinChange(this.pins.en, 0, timestamp + 0.1);
     }
 
     /**
@@ -52,7 +53,7 @@ export class LCDHardwareSimulator {
      */
     private sendCommand(byte: number): void {
         const lcdEngine = getLCDEngine();
-        lcdEngine.onPinChange(this.pins.rs, 0, Date.now()); // RS=0 for command
+        lcdEngine.onPinChange(this.pins.rs, 0, performance.now()); // RS=0 for command
 
         // Send high nibble first, then low nibble (4-bit mode)
         this.sendNibble((byte >> 4) & 0x0F);
@@ -64,7 +65,7 @@ export class LCDHardwareSimulator {
      */
     private sendData(byte: number): void {
         const lcdEngine = getLCDEngine();
-        lcdEngine.onPinChange(this.pins.rs, 1, Date.now()); // RS=1 for data
+        lcdEngine.onPinChange(this.pins.rs, 1, performance.now()); // RS=1 for data
 
         // Send high nibble first, then low nibble (4-bit mode)
         this.sendNibble((byte >> 4) & 0x0F);
@@ -93,8 +94,8 @@ export class LCDHardwareSimulator {
      */
     public clear(): void {
         console.log(`📺 [Hardware Sim] clear()`);
-        this.sendCommand(0x01); // Clear display command
-        this.sendCommand(0x02); // Return home
+        this.sendCommand(0x01); // ✅ FIX: Clear display (already includes return home)
+        // Removed 0x02 - clear command already returns home
     }
 
     /**

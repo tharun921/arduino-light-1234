@@ -50,23 +50,24 @@ export const UniversalComponent = ({
   // Check if this is an LCD component
   const isLCD = component.id.includes("lcd");
 
-  // Get LCD display buffer - prioritize component.props.lcdText (from compilation)
-  // This ensures the parsed static text from lcd.print() is displayed
+  // Get LCD display buffer - PRIORITIZE ENGINE WHEN SIMULATING (for scrolling, etc.)
+  // Static text from props is only used when NOT simulating
   let lcdText = { line1: '', line2: '' };
   if (isLCD) {
-    // First, check if we have LCD text from code compilation (stored in props)
-    if (component.props?.lcdText) {
-      lcdText = component.props.lcdText as { line1: string; line2: string };
-      console.log(`📺 LCD text from component props for ${component.instanceId}:`, lcdText);
-    }
-    // Fallback to engine if still empty and simulation is running
-    else if (isSimulating) {
+    // CHANGED: When simulating, always use engine for real-time updates (scrolling, etc.)
+    if (isSimulating) {
       const lcdEngine = getLCDEngine();
       const buffer = lcdEngine.getDisplayBuffer(component.instanceId);
       if (buffer && (buffer.line1 || buffer.line2)) {
         lcdText = buffer;
-        console.log(`📺 LCD text from engine for ${component.instanceId}:`, buffer);
+        // Note: buffer includes cursorRow, cursorCol, cursorVisible, blinkEnabled
+        console.log(`📺 LCD text from engine (real-time) for ${component.instanceId}:`, buffer);
       }
+    }
+    // Fallback to static props when NOT simulating
+    else if (component.props?.lcdText) {
+      lcdText = component.props.lcdText as { line1: string; line2: string };
+      console.log(`📺 LCD text from component props (static) for ${component.instanceId}:`, lcdText);
     }
   }
 

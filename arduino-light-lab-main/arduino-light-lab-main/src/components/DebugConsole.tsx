@@ -117,7 +117,7 @@ export const DebugConsole: React.FC<DebugConsoleProps> = ({
             >
                 <div className="flex items-center gap-2 text-sm font-medium text-gray-200">
                     {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronUp className="h-4 w-4" />}
-                    <span>Debug Console</span>
+                    <span>Serial Monitor</span>
                     <span className="text-gray-500 text-xs">({logs.length} logs)</span>
                 </div>
                 <Button

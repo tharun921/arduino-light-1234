@@ -2,17 +2,26 @@
  * Turbidity Sensor Engine
  * 
  * Simulates realistic turbidity sensor behavior:
- * 1. IR LED light emission through water
+ * 1. IR LED light emission through optical medium (air/water)
  * 2. Light scattering by suspended particles (Mie scattering)
  * 3. Photodiode light detection
- * 4. Voltage generation (0-5V) based on turbidity
+ * 4. Voltage generation (0-5V) based on medium and turbidity
  * 5. NTU (Nephelometric Turbidity Units) calculation
  * 
  * Physics Model:
- * - Clean water (0 NTU): High photodiode signal → ~4.5V
- * - Turbid water (1000 NTU): Low photodiode signal → ~0.5V
+ * - AIR: Invalid reading (~0.2V, probe not in water)
+ * - WATER Clean (0 NTU): High photodiode signal → ~4.5V
+ * - WATER Turbid (1000 NTU): Low photodiode signal → ~0.5V
  * - Exponential attenuation: I = I₀ * e^(-k * turbidity)
  */
+
+/**
+ * Optical medium that the probe is immersed in
+ */
+export enum MediumType {
+    AIR = 'air',    // Probe in air → invalid reading
+    WATER = 'water' // Probe in water → valid NTU measurement
+}
 
 export interface TurbidityPinConfig {
     ledPlus: number;   // LED+ pin (power to IR LED)
@@ -28,8 +37,9 @@ export interface TurbidityProbeState {
     turbidity: number;        // Water turbidity in NTU (0-1000)
     ledEnabled: boolean;      // IR LED on/off state
     voltage: number;          // Current analog output voltage (0-5V)
-    waterChamberConnected: boolean;
+    medium: MediumType;       // Optical medium: air or water
     lastUpdateTime: number;
+    settleUntil: number;      // Timestamp when sensor finishes settling
 }
 
 export class TurbidityEngine {
@@ -41,11 +51,18 @@ export class TurbidityEngine {
     private readonly ATTENUATION_COEFFICIENT = 0.005; // Light scattering coefficient
     private readonly MAX_VOLTAGE = 4.5; // Clean water voltage
     private readonly MIN_VOLTAGE = 0.5; // Maximum turbidity voltage
+    private readonly INVALID_VOLTAGE = 0.2; // Air/invalid reading voltage
     private readonly MAX_TURBIDITY = 1000; // Maximum NTU
 
     constructor(onVoltageUpdate?: (analogPin: number, voltage: number) => void) {
         this.onVoltageUpdate = onVoltageUpdate;
         console.log('💧 Turbidity Engine initialized');
+        // 🔁 Periodic voltage refresh (ADC-like behavior)
+        setInterval(() => {
+            this.probes.forEach(probe => {
+                this.updateProbeVoltage(probe);
+            });
+        }, 50); // refresh every 50ms
     }
 
     /**
@@ -56,22 +73,30 @@ export class TurbidityEngine {
             instanceId,
             pins,
             turbidity: 50, // Default: slightly turbid water
-            ledEnabled: false,
+            ledEnabled: true, // LED ON by default (VCC connected to power)
             voltage: 0,
-            waterChamberConnected: false,
+            medium: MediumType.WATER, // Default: probe in water (CHANGED from AIR)
             lastUpdateTime: Date.now(),
+            settleUntil: 0, // No settling delay initially
         };
 
         this.probes.set(instanceId, probe);
-        this.pinToProbe.set(pins.ledPlus, instanceId);
-        this.pinToProbe.set(pins.ledMinus, instanceId);
+        this.pinToProbe.set(pins.ledPlus, instanceId); // Only track LED+
 
-        console.log(`✅ Turbidity probe registered: ${instanceId}`);
-        console.log(`   LED+=${pins.ledPlus}, LED-=${pins.ledMinus}`);
-        console.log(`   PH+=${pins.phPlus}, PH-=${pins.phMinus}, AO=${pins.analogOut}`);
+        console.log(`💧 Registered turbidity probe: ${instanceId}`);
+        console.log(`   LED+: ${pins.ledPlus}`);
+        console.log(`   Analog Out: ${pins.analogOut}`);
 
-        // Calculate initial voltage
-        this.updateProbeVoltage(probe);
+        // Provide initial voltage immediately
+        probe.voltage = this.turbidityToVoltage(
+            probe.turbidity,
+            probe.ledEnabled,
+            probe.medium
+        );
+
+        if (this.onVoltageUpdate) {
+            this.onVoltageUpdate(probe.pins.analogOut, probe.voltage);
+        }
     }
 
     /**
@@ -81,7 +106,6 @@ export class TurbidityEngine {
         const probe = this.probes.get(instanceId);
         if (probe) {
             this.pinToProbe.delete(probe.pins.ledPlus);
-            this.pinToProbe.delete(probe.pins.ledMinus);
             this.probes.delete(instanceId);
             console.log(`❌ Turbidity probe unregistered: ${instanceId}`);
         }
@@ -92,23 +116,27 @@ export class TurbidityEngine {
      */
     setTurbidity(instanceId: string, turbidity: number): void {
         const probe = this.probes.get(instanceId);
-        if (probe) {
-            probe.turbidity = Math.max(0, Math.min(this.MAX_TURBIDITY, turbidity));
-            this.updateProbeVoltage(probe);
-            console.log(`💧 [${instanceId}] Turbidity set to: ${probe.turbidity.toFixed(1)} NTU`);
-        }
+        if (!probe) return;
+
+        probe.turbidity = Math.max(0, Math.min(this.MAX_TURBIDITY, turbidity));
+        this.updateProbeVoltage(probe);
+        probe.settleUntil = Date.now() + 200; // 200ms settling delay (set AFTER update)
+
+        console.log(`💧 Updated turbidity: ${probe.turbidity} NTU → ${probe.voltage.toFixed(2)}V`);
     }
 
     /**
-     * Connect/disconnect water chamber
+     * Set the optical medium (air or water)
      */
-    setWaterChamberConnection(instanceId: string, connected: boolean): void {
+    setMedium(instanceId: string, medium: MediumType): void {
         const probe = this.probes.get(instanceId);
-        if (probe) {
-            probe.waterChamberConnected = connected;
-            console.log(`💧 [${instanceId}] Water chamber ${connected ? 'connected' : 'disconnected'}`);
-            this.updateProbeVoltage(probe);
-        }
+        if (!probe) return;
+
+        probe.medium = medium;
+        this.updateProbeVoltage(probe);
+        probe.settleUntil = Date.now() + 200; // 200ms settling delay (set AFTER update)
+
+        console.log(`💧 Medium changed to: ${medium}`);
     }
 
     /**
@@ -134,23 +162,34 @@ export class TurbidityEngine {
     }
 
     /**
-     * Calculate light attenuation based on turbidity (Mie scattering)
+     * Calculate light attenuation based on turbidity and medium (Mie scattering)
      */
-    private calculateLightAttenuation(turbidity: number): number {
-        // Exponential decay: I = I₀ * e^(-k * turbidity)
+    private calculateLightAttenuation(turbidity: number, medium: MediumType): number {
+        if (medium === MediumType.AIR) {
+            return 1.0; // Almost full light in air, but reading is meaningless
+        }
+
+        // WATER: Exponential decay based on turbidity
+        // I = I₀ * e^(-k * turbidity)
         // Higher turbidity → more scattering → less light reaches photodiode
         return Math.exp(-this.ATTENUATION_COEFFICIENT * turbidity);
     }
 
     /**
-     * Convert turbidity to analog voltage
+     * Convert turbidity to analog voltage based on medium
      */
-    private turbidityToVoltage(turbidity: number, ledEnabled: boolean): number {
+    private turbidityToVoltage(turbidity: number, ledEnabled: boolean, medium: MediumType): number {
         if (!ledEnabled) {
             return 0; // No LED = no light = no signal
         }
 
-        const attenuation = this.calculateLightAttenuation(turbidity);
+        // PROBE IN AIR → Invalid reading
+        if (medium === MediumType.AIR) {
+            return this.INVALID_VOLTAGE; // ~0.2V, probe not in water
+        }
+
+        // PROBE IN WATER → Valid NTU measurement
+        const attenuation = this.calculateLightAttenuation(turbidity, medium);
 
         // Linear mapping of attenuation to voltage range
         // Clean water (attenuation ≈ 1.0) → high voltage (4.5V)
@@ -182,20 +221,25 @@ export class TurbidityEngine {
      * Update probe voltage and notify Arduino
      */
     private updateProbeVoltage(probe: TurbidityProbeState): void {
-        // Only generate voltage if water chamber is connected
-        if (!probe.waterChamberConnected) {
-            probe.voltage = 0;
-            return;
-        }
+        // Block updates during settling period (realistic sensor behavior)
+        if (Date.now() < probe.settleUntil) return;
 
-        const newVoltage = this.turbidityToVoltage(probe.turbidity, probe.ledEnabled);
+        const newVoltage = this.turbidityToVoltage(
+            probe.turbidity,
+            probe.ledEnabled,
+            probe.medium
+        );
 
         if (Math.abs(newVoltage - probe.voltage) > 0.01) { // Significant change
             probe.voltage = newVoltage;
             probe.lastUpdateTime = Date.now();
 
-            const ntu = TurbidityEngine.voltageToNTU(newVoltage);
-            console.log(`📊 [${probe.instanceId}] ${probe.turbidity.toFixed(1)} NTU → ${newVoltage.toFixed(2)}V (reads as ${ntu.toFixed(1)} NTU)`);
+            if (probe.medium === MediumType.AIR) {
+                console.log(`🌬️ [${probe.instanceId}] AIR → ${newVoltage.toFixed(2)}V (INVALID reading)`);
+            } else {
+                const ntu = TurbidityEngine.voltageToNTU(newVoltage);
+                console.log(`📊 [${probe.instanceId}] ${probe.turbidity.toFixed(1)} NTU → ${newVoltage.toFixed(2)}V (reads as ${ntu.toFixed(1)} NTU)`);
+            }
 
             // Update Arduino analog pin
             if (this.onVoltageUpdate) {

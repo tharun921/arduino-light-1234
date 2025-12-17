@@ -8,7 +8,7 @@ import { CodeEditor } from "./CodeEditor";
 import { DebugConsole, DebugLog } from "./DebugConsole";
 import { getUltrasonicEngine } from "../simulation/UltrasonicEngine";
 import { getLCDEngine } from "../simulation/LCDEngine";
-import { getTurbidityEngine } from "../simulation/TurbidityEngine";
+import { getTurbidityEngine, TurbidityEngine, MediumType } from "../simulation/TurbidityEngine";
 import { simulateLCDFromCode } from "../simulation/LCDHardwareSimulator";
 import { UniversalComponent } from "./components/UniversalComponent";
 import { PlacedComponent } from "@/types/components";
@@ -81,7 +81,7 @@ export const SimulationCanvas = () => {
   const [forceUpdate, setForceUpdate] = useState(0); // Force component re-render
   const [isCodeUploaded, setIsCodeUploaded] = useState(false); // Track if code is compiled and uploaded
 
-  // Debug Console state
+  // Serial Monitor state
   const [debugLogs, setDebugLogs] = useState<DebugLog[]>([]);
   const [consoleExpanded, setConsoleExpanded] = useState(false);
   const [consoleHeight, setConsoleHeight] = useState(200);
@@ -97,7 +97,7 @@ export const SimulationCanvas = () => {
   const canvasRef = useRef<HTMLDivElement>(null);
 
   // Compiler Mode state
-  const [useCompilerMode, setUseCompilerMode] = useState(true); // Toggle between regex and compiler
+  const [useCompilerMode, setUseCompilerMode] = useState(true); // ✅ Arduino CLI + AVR8.js (real compiler)
   const [useAVR8js, setUseAVR8js] = useState(true); // Use AVR8.js (true) or custom emulator (false)
   const [avrEmulator, setAvrEmulator] = useState<AVREmulator | null>(null);
   const [avr8jsEmulator, setAvr8jsEmulator] = useState<AVR8jsWrapper | null>(null);
@@ -603,7 +603,26 @@ export const SimulationCanvas = () => {
     console.log("💧 Registering turbidity probes...");
 
     const turbidityEngine = getTurbidityEngine((analogPin, voltage) => {
-      console.log(`📊 Turbidity analog A${analogPin - 14} = ${voltage.toFixed(2)}V`);
+      const analogPinLabel = `A${analogPin - 14}`;
+      console.log(`📊 Turbidity analog ${analogPinLabel} = ${voltage.toFixed(2)}V`);
+
+      // Calculate NTU from voltage for user-friendly display
+      const ntu = TurbidityEngine.voltageToNTU(voltage);
+
+      // Log to Serial Monitor
+      addDebugLog(
+        'sensor',
+        `Turbidity ${analogPinLabel}: ${voltage.toFixed(2)}V (${ntu.toFixed(1)} NTU)`,
+        voltage
+      );
+
+      // Push voltage to AVR8js emulator's ADC registers
+      if (avr8jsEmulator) {
+        avr8jsEmulator.setAnalogValue(analogPin, voltage);
+      } else if (avrEmulator) {
+        // Fallback to custom emulator (if implemented)
+        console.warn('⚠️ Custom emulator analog support not implemented yet');
+      }
     });
 
     const probes = placedComponents.filter(c => c.id.includes("turbidity-probe"));
@@ -658,12 +677,19 @@ export const SimulationCanvas = () => {
       ));
 
       if (chamber) {
-        turbidityEngine.setWaterChamberConnection(probe.instanceId, true);
+        turbidityEngine.setMedium(probe.instanceId, MediumType.WATER);
         turbidityEngine.setTurbidity(probe.instanceId, 50);
         console.log(`  ✓ Probe connected to chamber - 50 NTU`);
+
+        // Log to Serial Monitor
+        addDebugLog('info', 'Turbidity probe connected to water chamber (50 NTU)');
       }
 
       console.log(`✅ Turbidity probe registered:`, pinMap);
+
+      // Log probe registration to Serial Monitor
+      const analogPinLabel = `A${pinMap.aout - 14}`;
+      addDebugLog('info', `Turbidity probe registered on ${analogPinLabel}`);
     });
   };
 
@@ -1205,6 +1231,7 @@ export const SimulationCanvas = () => {
         updatePinConnections();
         registerLCDComponents();  // Register LCDs with engine
         registerUltrasonicComponents();  // Register Ultrasonic sensors with engine
+        registerTurbidityProbes();  // Register Turbidity sensors with engine
       }, 100);
 
       // If simulation is active, update the circuit state
@@ -1457,6 +1484,19 @@ export const SimulationCanvas = () => {
     });
 
     console.log(`💧 Water chamber turbidity set to ${newTurbidity} NTU for ${connectedSensors.length} connected sensors`);
+
+    // Log to Serial Monitor
+    const qualityLabel =
+      newTurbidity < 5 ? 'Clear' :
+        newTurbidity < 50 ? 'Slightly Turbid' :
+          newTurbidity < 300 ? 'Turbid' :
+            newTurbidity < 600 ? 'Very Turbid' : 'Extremely Turbid';
+
+    addDebugLog(
+      'info',
+      `Water chamber turbidity: ${newTurbidity.toFixed(0)} NTU (${qualityLabel})`,
+      newTurbidity
+    );
   };
 
   // Close water chamber editor
@@ -1597,9 +1637,11 @@ export const SimulationCanvas = () => {
 
   // Toggle simulation - Simple and forgiving like Wokwi
   const toggleSimulation = () => {
+    console.log('🎮 toggleSimulation called, isCodeUploaded:', isCodeUploaded);
     if (!isSimulating) {
       // Just check if there's any code at all
       if (!isCodeUploaded) {
+        console.log('❌ Cannot start simulation - code not uploaded');
         toast.error("⚠️ Please write and compile some code first!");
         addDebugLog('error', 'Cannot start simulation - no code uploaded');
         return;
@@ -1934,7 +1976,7 @@ export const SimulationCanvas = () => {
   /**
    * Executes Arduino code using real compilation and AVR emulation
    */
-  const executeCodeWithCompiler = async (code: string) => {
+  const executeCodeWithCompiler = async (code: string): Promise<boolean> => {
     try {
       console.log('⚙️ --- COMPILATION START ---');
       console.log('📋 Using:', useAVR8js ? 'AVR8.js (Real AVR Emulation)' : 'Custom Emulator');
@@ -1955,13 +1997,25 @@ export const SimulationCanvas = () => {
       const result = await response.json();
       console.log('📦 Backend result:', result);
       console.log('📦 Result keys:', Object.keys(result));
+      console.log('📦 result.success:', result.success, 'Type:', typeof result.success);
+      console.log('📦 result.errors:', result.errors);
+      console.log('📦 result.binaryData length:', result.binaryData?.length);
 
       if (!result.success) {
         console.error('❌ Compilation failed:', result.errors);
-        addDebugLog('error', `Compilation failed: ${result.errors.join(', ')}`);
-        toast.error('Compilation failed!');
+        console.error('❌ Full result object:', JSON.stringify(result, null, 2));
+
+        // Show detailed error message to user
+        const errorMsg = result.errors?.join('\n') || result.error || 'Unknown compilation error';
+        addDebugLog('error', `Compilation failed: ${errorMsg}`);
+
+        // Show toast with actual error
+        toast.error(`Compilation failed! ${errorMsg.substring(0, 100)}${errorMsg.length > 100 ? '...' : ''}`, {
+          duration: 10000  // Show for 10 seconds
+        });
+
         setIsCodeUploaded(false);
-        return;
+        return false; // ✅ Return false on failure
       }
 
       console.log('✅ Compilation successful!');
@@ -1981,34 +2035,87 @@ export const SimulationCanvas = () => {
         setForceUpdate(prev => prev + 1);
       });
 
+      // ✅ FIX: Register all components with their engines BEFORE starting emulator
+      console.log('📡 Registering components with engines...');
+      registerLCDComponents();
+      registerUltrasonicComponents();
+      registerTurbidityProbes();
+      console.log('✅ Component registration complete');
+
       if (useAVR8js) {
+        // ⚡ CLEANUP: Stop and dispose old emulator before creating new one
+        if (avr8jsEmulator) {
+          console.log('🧹 Cleaning up previous AVR8.js emulator...');
+          stopAVR8jsLoop();  // Stop the interval loop
+          avr8jsEmulator.dispose();  // Dispose of old instance
+          await new Promise(resolve => setTimeout(resolve, 100)); // Wait for cleanup
+        }
+
         // Use AVR8.js for accurate emulation
         console.log('🎮 Initializing AVR8.js emulator...');
+        addDebugLog('info', 'Initializing AVR8.js emulator...');
         const emulator = new AVR8jsWrapper(hal);
+
         console.log('📦 Loading HEX with', result.binaryData?.length || 0, 'segments...');
+        addDebugLog('info', `Loading ${result.binaryData?.length || 0} HEX segments...`);
         console.log('🔍 First segment sample:', result.binaryData?.[0]);
         console.log('🔍 First segment data type:', Array.isArray(result.binaryData?.[0]?.data) ? 'Array' : typeof result.binaryData?.[0]?.data);
         console.log('🔍 First segment data length:', result.binaryData?.[0]?.data?.length);
         emulator.loadHex(result.binaryData as HexSegment[]);
+
+        // ✅ FIX 3: CRITICAL - Reset LCD BEFORE starting AVR!
+        // lcd.begin() happens in setup() - if we reset LCD after, commands are lost
+        console.log('📺 Resetting LCD engine BEFORE AVR starts...');
+        getLCDEngine().resetAll();
+
         console.log('▶️ Starting AVR8.js CPU...');
+        addDebugLog('info', 'Starting AVR8.js CPU...');
+
+        // ✅ FIX #4: Reset LCD before starting emulator for clean state
+        console.log('📺 Resetting LCD engine...');
+        getLCDEngine().resetAll();
+
         emulator.start();
         setAvr8jsEmulator(emulator);
 
+        // ✅ Wait for emulator to be fully initialized before starting loop
+        console.log('⏳ Waiting for emulator to initialize...');
+        toast.info('⏳ Initializing emulator...');
+        await new Promise(resolve => setTimeout(resolve, 200)); // Small delay for initialization
+
         toast.success('✅ Code compiled with AVR8.js!');
+        addDebugLog('info', 'AVR8.js emulator ready!');
+        console.log('🎮 Setting isCodeUploaded to TRUE');
         setIsCodeUploaded(true);
+
         console.log('🔄 Starting AVR8.js execution loop...');
+        addDebugLog('info', 'Starting execution loop...');
         startAVR8jsLoop(emulator);
         console.log('✅ --- COMPILATION COMPLETE ---');
+        return true; // ✅ Return true on success
       } else {
+        // ⚡ CLEANUP: Stop old custom emulator too
+        if (avrEmulator) {
+          console.log('🧹 Cleaning up previous custom emulator...');
+          stopEmulatorLoop();
+          // Custom emulator doesn't have dispose yet, but stop is called
+        }
+
         // Use custom emulator (fallback)
         console.log('🔧 Initializing custom AVR emulator...');
         const emulator = new AVREmulator(hal);
         emulator.loadHex(result.binaryData as HexSegment[]);
         setAvrEmulator(emulator);
 
+        // ✅ FIX #4: Reset LCD before starting emulator for clean state
+        console.log('📺 Resetting LCD engine...');
+        getLCDEngine().resetAll();
+
         toast.success('✅ Code compiled with custom emulator!');
+        console.log('🎮 Setting isCodeUploaded to TRUE');
         setIsCodeUploaded(true);
         startEmulatorLoop(emulator);
+        return true; // ✅ Return true on success
       }
 
     } catch (error: any) {
@@ -2021,10 +2128,12 @@ export const SimulationCanvas = () => {
         console.warn('⚠️ Backend unavailable - using simple mode');
         toast.warning('Backend unavailable, using simple mode');
         executeCode(code);
+        return true; // Simple mode worked
       } else {
         toast.error(`Compilation failed: ${error.message}`);
       }
       setIsCodeUploaded(false);
+      return false; // ✅ Return false on error
     }
   };
 
@@ -2033,15 +2142,16 @@ export const SimulationCanvas = () => {
   /**
    * Unified upload handler - chooses between compiler modes
    */
-  const handleUploadCode = (code: string) => {
+  const handleUploadCode = async (code: string): Promise<boolean> => {
     if (useCompilerMode) {
       // Use real Arduino CLI + AVR8.js compilation
       console.log('📤 Using real compiler mode (Arduino CLI + AVR8.js)');
-      executeCodeWithCompiler(code);
+      return await executeCodeWithCompiler(code);
     } else {
       // Use regex-based simple compilation
       console.log('📤 Using simple mode (regex-based)');
       executeCode(code);
+      return true; // Simple mode always succeeds
     }
   };
   const startEmulatorLoop = (emulator: AVREmulator) => {
@@ -2063,7 +2173,8 @@ export const SimulationCanvas = () => {
     setEmulatorRunning(false);
   };
 
-  // AVR8.js emulator loop (runs at ~60 FPS, executes 16MHz / 60 = ~266k cycles per frame)
+  // ✅ FIXED: AVR8.js emulator loop using time-based execution with requestAnimationFrame
+  // Syncs with browser render loop for smooth, accurate LCD timing
   const startAVR8jsLoop = (emulator: AVR8jsWrapper) => {
     console.log('🚀 startAVR8jsLoop() CALLED');
     console.log(`   Emulator exists: ${!!emulator}`);
@@ -2071,36 +2182,44 @@ export const SimulationCanvas = () => {
     if (emulatorIntervalRef.current) clearInterval(emulatorIntervalRef.current);
     setEmulatorRunning(true);
 
-    // Run at 60 FPS, execute proportional CPU cycles for 16 MHz
-    const CYCLES_PER_FRAME = Math.floor(16000000 / 60);
-    console.log(`   Cycles per frame: ${CYCLES_PER_FRAME}`);
+    // ✅ FIX 2: Use time slices that allow delay() to complete
+    // Balance between responsiveness and allowing longer operations
+    const SLICE_TIME_MS = 10;  // 10ms allows delay() calls to progress
+    console.log(`   Slice time: ${SLICE_TIME_MS}ms (for delay() compatibility)`);
 
     let frameCount = 0;
-    emulatorIntervalRef.current = window.setInterval(() => {
+
+    // Use requestAnimationFrame for better timing sync
+    const runFrame = () => {
+      if (!emulator || !emulatorRunning) return;
+
       frameCount++;
-      if (frameCount % 60 === 0) {
-        console.log(`⏱️ AVR8.js interval executing (frame ${frameCount})`);
+      if (frameCount % 300 === 0) {
+        console.log(`⏱️ AVR8.js frame ${frameCount}`);
       }
 
-      if (emulator) {
-        const executed = emulator.run(CYCLES_PER_FRAME);
-        if (frameCount <= 3) {
-          console.log(`   Frame ${frameCount}: Executed ${executed} cycles`);
-        }
-
-        // ✨ CRITICAL: Check for port changes to detect digitalWrite()!
-        emulator.checkPortChanges();
-
-        if (executed === 0) {
-          console.log('❌ Emulator returned 0 cycles - stopping');
-          stopAVR8jsLoop();
-        }
-      } else {
-        console.log('❌ Emulator is null in interval!');
+      // ✅ Run small slice of execution
+      const executed = emulator.runForTime(SLICE_TIME_MS);
+      if (frameCount <= 5) {
+        console.log(`   Frame ${frameCount}: Executed ${executed} cycles in ${SLICE_TIME_MS}ms`);
       }
-    }, 16); // ~60 FPS
 
-    console.log(`✅ AVR8.js interval started (ID: ${emulatorIntervalRef.current})`);
+      // ✨ CRITICAL: Check for port changes to detect digitalWrite()!
+      emulator.checkPortChanges();
+
+      if (executed === 0) {
+        console.log('❌ Emulator returned 0 cycles - stopping');
+        stopAVR8jsLoop();
+        return;
+      }
+
+      // Continue loop
+      requestAnimationFrame(runFrame);
+    };
+
+    // Start the loop
+    requestAnimationFrame(runFrame);
+    console.log(`✅ AVR8.js animation frame loop started`);
   };
 
   const stopAVR8jsLoop = () => {
@@ -2619,6 +2738,7 @@ export const SimulationCanvas = () => {
       } else {
         toast.success(`✅ Code compiled successfully! Ready to run`);
       }
+      setIsCodeUploaded(true);
     } catch (error) {
       console.error("Compilation error:", error);
       toast.error(`❌ Compilation failed: ${error}`);
@@ -3696,20 +3816,22 @@ export const SimulationCanvas = () => {
           <CodeEditor
             value={currentCode}
             onClose={() => setShowCodeEditor(false)}
-            onCompile={(code) => {
+            onCompile={async (code) => {
               setCurrentCode(code);
-              handleUploadCode(code);
-              toast.success("Code compiled and ready to upload!");
+              console.log('🎮 CodeEditor onCompile: Starting compilation...');
+              const success = await handleUploadCode(code);
+              console.log('🎮 CodeEditor onCompile: Compilation result:', success);
+              // Don't show toast here - executeCodeWithCompiler already shows it
             }}
             onCodeChange={(code) => {
               setCurrentCode(code);
-              handleUploadCode(code);
+              // Don't compile on every keystroke - only save the code
             }}
           />
         )}
       </div>
 
-      {/* Debug Console at bottom */}
+      {/* Serial Monitor at bottom */}
       <DebugConsole
         logs={debugLogs}
         isExpanded={consoleExpanded}

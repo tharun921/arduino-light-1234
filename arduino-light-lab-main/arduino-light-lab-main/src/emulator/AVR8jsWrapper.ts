@@ -47,6 +47,9 @@ export class AVR8jsWrapper {
     private prevPortC = 0;
     private prevPortD = 0;
 
+    // Store analog values for each channel (A0-A5)
+    private analogValues: number[] = [0, 0, 0, 0, 0, 0];
+
     constructor(hal: HardwareAbstractionLayer) {
         this.hal = hal;
 
@@ -127,6 +130,7 @@ export class AVR8jsWrapper {
 
     /**
      * Execute one CPU instruction
+     * ✅ FIX: Now correctly counts CPU cycles (not just instructions)
      */
     private stepDebugCount = 0;
     step(): boolean {
@@ -141,10 +145,21 @@ export class AVR8jsWrapper {
                 console.log(`🔍 Step ${this.stepDebugCount}: PC=0x${pc.toString(16)}, Instruction=0x${instruction.toString(16)}`);
             }
 
-            // CRITICAL: Execute the instruction FIRST, then tick for timing
-            avrInstruction(this.cpu);  // This actually executes the instruction and advances PC
-            this.cpu.tick();            // This handles timing, interrupts, and peripherals
-            this.cycleCount++;
+            // ✅ FIX: Count actual CPU cycles used by instruction
+            const cyclesBefore = this.cpu.cycles;
+            avrInstruction(this.cpu);  // Execute instruction (auto-increments cpu.cycles)
+            const cyclesUsed = this.cpu.cycles - cyclesBefore;
+
+            // ✅ FIX: Tick for EACH cycle used (not just once)
+            for (let i = 0; i < cyclesUsed; i++) {
+                this.cpu.tick();  // Handle timing, interrupts, peripherals
+            }
+
+            this.cycleCount += cyclesUsed;
+
+            // ✅ FIX: Simulate ADC conversion completion
+            // When Arduino calls analogRead(), it sets ADSC bit and waits for it to clear
+            this.simulateADC();
 
             // Check for port changes and notify HAL
             this.checkPortChanges();
@@ -158,7 +173,8 @@ export class AVR8jsWrapper {
     }
 
     /**
-     * Execute multiple CPU cycles
+     * Execute multiple CPU cycles (instruction-based)
+     * @deprecated Use runForTime() for time-based execution
      */
     run(cycles: number = 1000): number {
         let executed = 0;
@@ -177,6 +193,25 @@ export class AVR8jsWrapper {
         }
 
         return executed;
+    }
+
+    /**
+     * ✅ NEW: Run emulator for a specific time duration (milliseconds)
+     * This is the CORRECT way to run AVR emulation for timing-sensitive code
+     * @param ms - Time to run in milliseconds
+     * @returns Actual cycles executed
+     */
+    runForTime(ms: number): number {
+        const targetCycles = Math.floor((ms * this.CLOCK_FREQ) / 1000);
+        const startCycles = this.cycleCount;
+
+        while (this.running && (this.cycleCount - startCycles) < targetCycles) {
+            if (!this.step()) {
+                break;
+            }
+        }
+
+        return this.cycleCount - startCycles;
     }
 
     /**
@@ -244,6 +279,41 @@ export class AVR8jsWrapper {
     }
 
     /**
+     * Simulate ADC (Analog-to-Digital Converter) operation
+     * This fixes the analogRead() hanging issue
+     */
+    private simulateADC(): void {
+        const ADCSRA = 0x7A; // ADC Control and Status Register A
+        const ADMUX = 0x7C;  // ADC Multiplexer Selection Register
+        const ADCL = 0x78;   // ADC Data Register Low
+        const ADCH = 0x79;   // ADC Data Register High
+        const ADSC = 6;      // ADC Start Conversion bit
+
+        // Check if ADC conversion was started (ADSC bit set)
+        const adcsra = this.cpu.data[ADCSRA];
+        if (adcsra & (1 << ADSC)) {
+            // Get selected analog channel from ADMUX (bits 0-3)
+            const admux = this.cpu.data[ADMUX];
+            const channel = admux & 0x07; // Extract channel (0-5 for A0-A5)
+
+            // Get the stored ADC value for this channel
+            const adcValue = this.analogValues[channel] || 0;
+
+            // Write ADC result to registers (10-bit value, right-adjusted)
+            this.cpu.data[ADCL] = adcValue & 0xFF;        // Lower 8 bits
+            this.cpu.data[ADCH] = (adcValue >> 8) & 0x03; // Upper 2 bits
+
+            // Clear ADSC bit to signal conversion complete
+            this.cpu.data[ADCSRA] = adcsra & ~(1 << ADSC);
+
+            // Set ADIF (ADC Interrupt Flag) to indicate conversion complete
+            this.cpu.data[ADCSRA] |= (1 << 4);
+
+            console.log(`🔬 ADC read: A${channel} = ${adcValue} (${(adcValue * 5.0 / 1023).toFixed(2)}V)`);
+        }
+    }
+
+    /**
      * Set external pin state (for sensors, buttons, etc.)
      */
     setExternalPin(pin: number, value: 0 | 1): void {
@@ -277,6 +347,57 @@ export class AVR8jsWrapper {
 
         // Also update HAL
         this.hal.setExternalPinState(pin, value);
+    }
+
+    /**
+     * Set analog pin value (for sensors like turbidity, temperature, etc.)
+     * Simulates ADC (Analog to Digital Converter) result
+     * @param pin - Arduino analog pin (14-19 for A0-A5, or 0-5)
+     * @param voltage - Voltage value (0.0 to 5.0V)
+     */
+    setAnalogValue(pin: number, voltage: number): void {
+        // Normalize pin number (accept both A0-A5 as 0-5 or 14-19)
+        const analogPin = pin >= 14 ? pin - 14 : pin;
+
+        if (analogPin < 0 || analogPin > 5) {
+            console.warn(`⚠️ Invalid analog pin: ${pin} (must be 0-5 or 14-19)`);
+            return;
+        }
+
+        // Clamp voltage to 0-5V range
+        const clampedVoltage = Math.max(0, Math.min(5.0, voltage));
+
+        // Convert voltage to 10-bit ADC value (0-1023)
+        // Arduino's ADC is 10-bit: 5V → 1023, 0V → 0
+        const adcValue = Math.round((clampedVoltage / 5.0) * 1023);
+
+        // ✅ Store the ADC value for this channel (used by simulateADC)
+        this.analogValues[analogPin] = adcValue;
+
+        // ATmega328P ADC registers (data memory space)
+        const ADCL = 0x78;   // ADC Data Register Low
+        const ADCH = 0x79;   // ADC Data Register High
+        const ADCSRA = 0x7A; // ADC Control and Status Register A
+        const ADMUX = 0x7C;  // ADC Multiplexer Selection Register
+
+        // ✅ CRITICAL FIX: Enable ADC and mark conversion complete
+        // ADCSRA bits: [ADEN ADSC ADATE ADIF ADIE ADPS2 ADPS1 ADPS0]
+        // ADEN=1 (enable ADC), ADIF=1 (conversion complete flag)
+        this.cpu.data[ADCSRA] = (1 << 7) | (1 << 4); // Enable ADC + conversion complete
+
+        // Set ADMUX to select this analog channel
+        // ADMUX format: [REFS1 REFS0 ADLAR - MUX3 MUX2 MUX1 MUX0]
+        // We use REFS0=1 (AVcc reference), ADLAR=0 (right-adjusted), MUX=analogPin
+        this.cpu.data[ADMUX] = (1 << 6) | (analogPin & 0x07);
+
+        // Store 10-bit result in ADCL and ADCH (right-adjusted)
+        this.cpu.data[ADCL] = adcValue & 0xFF;        // Lower 8 bits
+        this.cpu.data[ADCH] = (adcValue >> 8) & 0x03; // Upper 2 bits
+
+        console.log(`📊 ADC: A${analogPin} = ${clampedVoltage.toFixed(2)}V → ${adcValue} (0x${adcValue.toString(16)})`);
+
+        // Also update HAL
+        this.hal.setAnalogValue(analogPin + 14, clampedVoltage);
     }
 
     /**
@@ -321,5 +442,24 @@ export class AVR8jsWrapper {
      */
     getExecutionTime(): number {
         return (this.cycleCount / this.CLOCK_FREQ) * 1000000;
+    }
+
+    /**
+     * ✅ NEW: Cleanup and dispose of the emulator instance
+     * Call this before creating a new emulator to prevent memory leaks
+     */
+    dispose(): void {
+        this.stop();
+        this.running = false;
+
+        // Reset all state
+        this.cycleCount = 0;
+        this.prevPortB = 0;
+        this.prevPortC = 0;
+        this.prevPortD = 0;
+        this.stepDebugCount = 0;
+        this.checkCount = 0;
+
+        console.log('🗑️ AVR8js emulator disposed and cleaned up');
     }
 }
