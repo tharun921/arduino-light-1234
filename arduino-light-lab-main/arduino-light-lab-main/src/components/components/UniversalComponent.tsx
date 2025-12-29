@@ -1,6 +1,7 @@
-import { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { PlacedComponent } from "@/types/components";
 import LCDComponent from "./LCDComponent";
+import { ServoComponent } from "./ServoComponent";
 import { getLCDEngine } from "@/simulation/LCDEngine";
 
 interface UniversalComponentProps {
@@ -10,16 +11,42 @@ interface UniversalComponentProps {
   onDragStart?: (e: React.DragEvent, instanceId: string) => void;
   onDragEnd?: (e: React.DragEvent) => void;
   pinState?: boolean; // For LED glow effect
+  servoAngle?: number; // For servo motor rotation (0-180°)
 }
 
-export const UniversalComponent = ({
+export const UniversalComponent: React.FC<UniversalComponentProps> = ({
   component,
   isSimulating = false,
   isDraggable = true,
   onDragStart,
   onDragEnd,
   pinState,
-}: UniversalComponentProps) => {
+  servoAngle,
+}) => {
+  // 🦾 Servo arm refs for direct DOM manipulation
+  const servoLineRef = useRef<SVGLineElement>(null);
+  const servoTipRef = useRef<SVGCircleElement>(null);
+
+  // 🦾 Direct DOM update when servo angle changes
+  useEffect(() => {
+    if (component.id.includes("servo") && isSimulating && servoLineRef.current && servoTipRef.current) {
+      const angle = (servoAngle ?? 90) - 90; // Convert to rotation angle
+      const angleRad = (angle * Math.PI) / 180;
+
+      // Calculate end point
+      const x2 = 50 + 40 * Math.cos(angleRad);
+      const y2 = 50 + 40 * Math.sin(angleRad);
+
+      // Directly update SVG attributes (bypasses React)
+      servoLineRef.current.setAttribute('x2', x2.toString());
+      servoLineRef.current.setAttribute('y2', y2.toString());
+      servoTipRef.current.setAttribute('cx', x2.toString());
+      servoTipRef.current.setAttribute('cy', y2.toString());
+
+      console.log(`🎨 DIRECT DOM UPDATE: Servo → ${servoAngle}° (rotation: ${angle}°, x2: ${x2.toFixed(1)}, y2: ${y2.toFixed(1)})`);
+    }
+  }, [servoAngle, component.id, isSimulating]);
+
   // Enhanced debug logging
   if (component.id.includes("led")) {
     console.log(`🔍 UniversalComponent LED: ${component.name}`, {
@@ -29,6 +56,20 @@ export const UniversalComponent = ({
       shouldGlow: isSimulating && pinState,
     });
   }
+
+  // 🦾 Servo debug logging
+  if (component.id.includes("servo")) {
+    const rotation = (servoAngle ?? 90) - 90;
+    console.log(`🦾 UniversalComponent SERVO: ${component.name}`, {
+      isSimulating,
+      servoAngle,
+      rotation,
+      transform: `rotate(${rotation}deg)`,
+      componentId: component.id,
+      instanceId: component.instanceId,
+    });
+  }
+
   const [isDragging, setIsDragging] = useState(false);
 
   const handleDragStart = (e: React.DragEvent) => {
@@ -99,16 +140,26 @@ export const UniversalComponent = ({
           </svg>
         ) : component.imagePath ? (
           <>
-            <img
-              src={component.imagePath}
-              alt={component.name}
-              className="w-full h-full object-contain"
-              onError={(e) => {
-                // Fallback to placeholder if image fails to load
-                e.currentTarget.style.display = "none";
-                e.currentTarget.nextElementSibling?.classList.remove("hidden");
-              }}
-            />
+            {/* ✅ SERVO: Use dedicated component with rotating horn */}
+            {component.id.includes("servo") ? (
+              <ServoComponent
+                id={component.instanceId}  // ✅ CRITICAL: Unique ID prevents ghost arms
+                angle={isSimulating ? (servoAngle ?? 90) : 90}
+                width={component.width}
+                height={component.height}
+              />
+            ) : (
+              <img
+                src={component.imagePath}
+                alt={component.name}
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  // Fallback to placeholder if image fails to load
+                  e.currentTarget.style.display = "none";
+                  e.currentTarget.nextElementSibling?.classList.remove("hidden");
+                }}
+              />
+            )}
             {/* SIMPLIFIED LED GLOW SYSTEM - Always show glow when simulating and LED component */}
             {component.id.includes("led") && isSimulating && (
               <div
@@ -186,9 +237,16 @@ export const UniversalComponent = ({
 
             {/* Arduino boards show no visual effects during simulation */}
 
-            {/* Motor effects - Spinning animation */}
-            {(component.id.includes("motor") ||
-              component.id.includes("servo")) &&
+            {/* 🦾 SERVO MOTOR - Angle display (rotation handled by ServoComponent) */}
+            {component.id.includes("servo") && isSimulating && (
+              <div className="absolute -bottom-6 left-1/2 -translate-x-1/2 text-xs font-bold text-blue-600 bg-white px-2 py-1 rounded shadow-md whitespace-nowrap z-50">
+                {(servoAngle ?? 90).toFixed(0)}° [{((servoAngle ?? 90) - 90).toFixed(0)}°]
+              </div>
+            )}
+
+            {/* DC Motor effects - Spinning animation (not servos) */}
+            {component.id.includes("motor") &&
+              !component.id.includes("servo") &&
               isSimulating &&
               pinState && (
                 <div
@@ -341,6 +399,6 @@ export const UniversalComponent = ({
       <div className="absolute -bottom-5 left-0 right-0 text-[10px] text-center text-muted-foreground truncate">
         {component.name}
       </div>
-    </div>
+    </div >
   );
 };

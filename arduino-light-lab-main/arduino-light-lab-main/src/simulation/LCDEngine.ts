@@ -118,10 +118,11 @@ class LCDInstance {
      */
     private latchData(): void {
         // ✅ FIX 1: Block latching while LCD is busy
-        const now = performance.now();
-        if (now < this.state.busyUntil) {
-            return; // LCD still busy → ignore this EN pulse
-        }
+        // DISABLED: In emulator mode, delay skip handles timing artificially
+        // const now = performance.now();
+        // if (now < this.state.busyUntil) {
+        //     return; // LCD still busy → ignore this EN pulse
+        // }
 
         // Read all pins
         const rs = this.state.pinStates[this.pins.rs] || 0;

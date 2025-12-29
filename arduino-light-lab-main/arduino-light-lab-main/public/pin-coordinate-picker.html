@@ -242,6 +242,16 @@
                     </div>
                 </div>
 
+                <!-- Marker Size Control -->
+                <div class="pin-input-group">
+                    <strong style="display: block; margin-bottom: 8px; color: #00bcd4;">Pin Marker Size:</strong>
+                    <input type="range" id="markerSize" min="4" max="20" value="6" step="1"
+                        style="width: 60%; vertical-align: middle;">
+                    <span id="markerSizeValue" style="margin-left: 10px; color: #4caf50; font-weight: bold;">6px</span>
+                    <p style="font-size: 11px; color: #999; margin-top: 5px;">Adjust the size of the green circle
+                        markers</p>
+                </div>
+
                 <!-- Pin Input -->
                 <div class="pin-input-group">
                     <strong style="display: block; margin-bottom: 8px; color: #00bcd4;">Pin Details:</strong>
@@ -278,6 +288,7 @@
         let imageScale = 1;
         let originalWidth = 0;
         let originalHeight = 0;
+        let markerRadius = 6; // Default marker radius in pixels
 
         const componentImage = document.getElementById('componentImage');
         const imageContainer = document.getElementById('imageContainer');
@@ -289,6 +300,8 @@
         const targetHeightInput = document.getElementById('targetHeight');
         const componentSelect = document.getElementById('componentSelect');
         const imageUpload = document.getElementById('imageUpload');
+        const markerSizeInput = document.getElementById('markerSize');
+        const markerSizeValue = document.getElementById('markerSizeValue');
 
         // Component selection
         componentSelect.addEventListener('change', function () {
@@ -341,6 +354,20 @@
                 `${scaleX.toFixed(3)} × ${scaleY.toFixed(3)}`;
         }
 
+        // Marker size control
+        markerSizeInput.addEventListener('input', function () {
+            markerRadius = parseInt(this.value);
+            markerSizeValue.textContent = markerRadius + 'px';
+
+            // Update all existing markers
+            const markers = imageContainer.querySelectorAll('.marker');
+            markers.forEach(marker => {
+                const size = markerRadius * 2;
+                marker.style.width = size + 'px';
+                marker.style.height = size + 'px';
+            });
+        });
+
         componentImage.addEventListener('click', function (e) {
             const pinId = pinIdInput.value.trim();
             const pinLabel = pinLabelInput.value.trim() || pinId.toUpperCase();
@@ -386,6 +413,9 @@
             // Add marker
             const marker = document.createElement('div');
             marker.className = 'marker';
+            const size = markerRadius * 2;
+            marker.style.width = size + 'px';
+            marker.style.height = size + 'px';
             marker.style.left = (rect.left - imageContainer.getBoundingClientRect().left + displayX) + 'px';
             marker.style.top = (rect.top - imageContainer.getBoundingClientRect().top + displayY) + 'px';
             marker.title = `${pinLabel} (${targetX}, ${targetY})`;

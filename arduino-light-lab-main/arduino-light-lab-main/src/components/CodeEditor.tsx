@@ -331,14 +331,52 @@ void loop() {
     }
   };
 
-  const handleUpload = () => {
-    // Upload means: compile and run immediately
-    if (status !== "success") {
-      // Need to compile first
-      handleCompile();
+  const handleUpload = async () => {
+    // Upload means: compile with Arduino CLI and upload to AVR8js
+    console.log('🚀 Upload button clicked - starting real compilation...');
+    setStatus("compiling");
+    setSyntaxErrors([]);
+
+    // Validate syntax locally first
+    const errors = validateArduinoCode(code);
+    const hasErrors = errors.some((e) => e.type === "error");
+    const hasWarnings = errors.some((e) => e.type === "warning");
+
+    setSyntaxErrors(errors);
+
+    if (hasErrors) {
+      setStatus("error");
+      toast.error(
+        `❌ Compilation failed! Found ${errors.filter((e) => e.type === "error").length} error(s)`,
+      );
+      return;
+    }
+
+    // Call the real compiler via onCompile callback
+    if (onCompile) {
+      console.log('📤 Calling onCompile to trigger Arduino CLI compilation...');
+      try {
+        // onCompile is async in SimulationCanvas, so we await it
+        await onCompile(code);
+
+        // Set success after compilation
+        setStatus("success");
+        if (hasWarnings) {
+          toast.warning(
+            `⚠️ Uploaded with ${errors.filter((e) => e.type === "warning").length} warning(s)`,
+          );
+        } else {
+          toast.success("✅ Code uploaded and running!");
+        }
+      } catch (error) {
+        console.error('❌ Upload failed:', error);
+        setStatus("error");
+        toast.error("❌ Upload failed! Check console for details.");
+      }
     } else {
-      // Already compiled, just notify
-      toast.success("✅ Code uploaded and running!");
+      // Fallback if no onCompile provided
+      setStatus("success");
+      toast.success("✅ Code validated successfully!");
     }
   };
 
@@ -416,12 +454,13 @@ void loop() {
         <Button
           size="sm"
           onClick={handleUpload}
-          disabled={status !== "success"}
-          variant="outline"
-          className="flex-1"
+          disabled={status === "compiling"}
+          variant="default"
+          className="flex-1 bg-green-600 hover:bg-green-700"
+          title="Compile with Arduino CLI and upload to simulator"
         >
-          <Download className="h-4 w-4 mr-2" />
-          Upload
+          <Play className="h-4 w-4 mr-2" />
+          Upload & Run
         </Button>
 
         <Button size="sm" variant="outline" onClick={handleCopy}>

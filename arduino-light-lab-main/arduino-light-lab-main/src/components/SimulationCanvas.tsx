@@ -9,6 +9,7 @@ import { DebugConsole, DebugLog } from "./DebugConsole";
 import { getUltrasonicEngine } from "../simulation/UltrasonicEngine";
 import { getLCDEngine } from "../simulation/LCDEngine";
 import { getTurbidityEngine, TurbidityEngine, MediumType } from "../simulation/TurbidityEngine";
+import { getServoEngine } from "../simulation/ServoEngine";
 import { simulateLCDFromCode } from "../simulation/LCDHardwareSimulator";
 import { UniversalComponent } from "./components/UniversalComponent";
 import { PlacedComponent } from "@/types/components";
@@ -17,6 +18,8 @@ import { saveProject, getAllProjects, loadProject, deleteProject, type Project }
 import { AVREmulator, type HexSegment } from "../emulator/AVREmulator";
 import { HardwareAbstractionLayer } from "../emulator/HardwareAbstractionLayer";
 import { AVR8jsWrapper } from "../emulator/AVR8jsWrapper";
+import { getPWMRouter } from "../emulator/PWMRouter";
+import { getSimulationClock } from "../emulator/SimulationClock";
 
 
 interface Wire {
@@ -108,6 +111,9 @@ export const SimulationCanvas = () => {
   const [editingWaterChamber, setEditingWaterChamber] = useState<string | null>(null); // instanceId of water chamber being edited
   const [waterChamberTurbidity, setWaterChamberTurbidity] = useState<number>(50); // Current turbidity value (0-1000 NTU)
 
+  // 🦾 Servo Motor state - tracks real-time servo angles for UI updates
+  const [servoAngles, setServoAngles] = useState<Record<string, number>>({}); // instanceId -> angle (0-180°)
+
 
   // ═══════════════════════════════════════════════════════════════════
   // 💾 AUTO-SAVE & AUTO-LOAD CIRCUIT (Browser Storage)
@@ -156,6 +162,77 @@ export const SimulationCanvas = () => {
   useEffect(() => {
     updatePinConnections();
   }, [wires, placedComponents]); // Re-run when wires or components change
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 🦾 SERVO ANIMATION LOOP (Wokwi-style)
+  // ═══════════════════════════════════════════════════════════════════
+  /**
+   * ✅ CRITICAL: Servo mechanical animation loop
+   * 
+   * This runs INDEPENDENTLY of the AVR CPU simulation.
+   * It updates servo positions smoothly at ~60fps, just like real servos.
+   * 
+   * Why separate from CPU?
+   * - CPU runs at 16MHz (millions of cycles/sec)
+   * - Servo mechanics are slow (~60°/0.1s)
+   * - Visual updates need smooth 60fps animation
+   * 
+   * This is exactly how Wokwi does it internally.
+   */
+  useEffect(() => {
+    let animationFrameId: number;
+
+    const servoAnimationLoop = () => {
+      // ✅ Update all servo mechanical positions
+      getServoEngine().updateServoAngle();
+
+      // Continue the loop
+      animationFrameId = requestAnimationFrame(servoAnimationLoop);
+    };
+
+    // Start the animation loop
+    animationFrameId = requestAnimationFrame(servoAnimationLoop);
+    console.log('🎬 Servo animation loop started');
+
+    // Cleanup on unmount
+    return () => {
+      if (animationFrameId) {
+        cancelAnimationFrame(animationFrameId);
+        console.log('🛑 Servo animation loop stopped');
+      }
+    };
+  }, []); // Run once on mount, cleanup on unmount
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 🦾 SERVO ANGLE LISTENER (Wokwi-style Event System)
+  // ═══════════════════════════════════════════════════════════════════
+  /**
+   * ✅ CRITICAL: Listen for servo angle changes from ServoEngine
+   * 
+   * When the AVR code sets a servo angle (via Timer1/OCR registers),
+   * the ServoEngine calculates the angle and notifies all listeners.
+   * This listener updates the React state, triggering a re-render.
+   * 
+   * This is the Wokwi approach: Observer pattern for peripheral state changes.
+   */
+  useEffect(() => {
+    const handleServoAngleChange = (instanceId: string, angle: number) => {
+      console.log(`🎯 Servo angle changed: ${instanceId} → ${angle}°`);
+
+      setServoAngles(prev => ({
+        ...prev,
+        [instanceId]: angle
+      }));
+
+      // React.memo in ServoComponent handles re-renders efficiently
+    };
+
+    // Register the listener
+    getServoEngine().onChange(handleServoAngleChange);
+    console.log('✅ Servo angle listener registered');
+
+    // Note: No cleanup needed - ServoEngine keeps listeners for app lifetime
+  }, []); // Run once on mount
 
   // ═══════════════════════════════════════════════════════════════════
   // 🔧 UNIVERSAL ARDUINO PIN EXTRACTION HELPER
@@ -693,6 +770,101 @@ export const SimulationCanvas = () => {
     });
   };
 
+  // ═══════════════════════════════════════════════════════════════════
+  // 🔧 SERVO MOTOR ENGINE INTEGRATION
+  // ═══════════════════════════════════════════════════════════════════
+  // 🦾 SERVO ENGINE REGISTRATION (Realistic Hardware Simulation)
+  // ═══════════════════════════════════════════════════════════════════
+  /**
+   * Registers Servo motors with the Servo engine
+   * Maps SIGNAL pin to Arduino pin numbers via wire connections
+   */
+  const registerServoComponents = () => {
+    console.log("🔧 Registering Servo motors with engine...");
+
+    const servoEngine = getServoEngine();
+    const servoComponents = placedComponents.filter(c => c.id.includes("servo"));
+
+    if (servoComponents.length === 0) {
+      console.log("  No Servo motors found");
+      return;
+    }
+
+    // ✅ Listener is already registered in useEffect above (line 231)
+    // No need to register it again here!
+
+    servoComponents.forEach(servo => {
+      console.log(`🔧 Processing ${servo.name} (${servo.instanceId})`);
+
+      const servoWires = wires.filter(wire =>
+        wire.startPinId.startsWith(servo.instanceId) ||
+        wire.endPinId.startsWith(servo.instanceId)
+      );
+
+      if (servoWires.length === 0) {
+        console.log("  No wires connected to servo");
+        return;
+      }
+
+      const pinMapping: Record<string, number> = {};
+      let hasGnd = false;
+      let hasVcc = false;
+
+      servoWires.forEach(wire => {
+        const servoPinId = wire.startPinId.startsWith(servo.instanceId)
+          ? wire.startPinId
+          : wire.endPinId;
+
+        const arduinoPinId = wire.startPinId.includes("arduino-uno")
+          ? wire.startPinId
+          : wire.endPinId.includes("arduino-uno")
+            ? wire.endPinId
+            : null;
+
+        const servoPinName = servoPinId.split("-").pop();
+
+        if (servoPinName === 'gnd') {
+          hasGnd = true;
+          console.log(`  ✓ Found GND connection`);
+        }
+        if (servoPinName === 'vcc') {
+          hasVcc = true;
+          console.log(`  ✓ Found VCC connection`);
+        }
+
+        if (!arduinoPinId) return;
+
+        const arduinoPinStr = extractArduinoPinNumber(arduinoPinId);
+        if (!servoPinName || !arduinoPinStr) return;
+
+        const arduinoPinNum = parseInt(arduinoPinStr, 10);
+        if (isNaN(arduinoPinNum)) return;
+
+        pinMapping[servoPinName] = arduinoPinNum;
+        console.log(`  Mapped Servo ${servoPinName.toUpperCase()} → Arduino Pin ${arduinoPinNum}`);
+      });
+
+      if (!hasGnd || !hasVcc) {
+        const missing = [];
+        if (!hasGnd) missing.push('GND');
+        if (!hasVcc) missing.push('VCC');
+        toast.error(`Servo Error: Connect ${missing.join(' and ')} for power`, { duration: 5000 });
+        addDebugLog('error', `Servo missing power: ${missing.join(', ')}`);
+        return;
+      }
+
+      if (!pinMapping.signal) {
+        console.warn(`  ⚠️ Servo missing SIGNAL pin`);
+        return;
+      }
+
+      servoEngine.registerServo(servo.instanceId, pinMapping.signal);
+      console.log(`✅ Servo motor registered: SIGNAL=${pinMapping.signal}`);
+      addDebugLog('info', `Servo registered on Pin ${pinMapping.signal}`);
+    });
+  };
+
+
   // Handle adding a component from the library
   const handleAddComponent = (componentId: string) => {
     const componentConfig = COMPONENT_DATA.find((c) => c.id === componentId);
@@ -845,7 +1017,7 @@ export const SimulationCanvas = () => {
 
     const newComponent: PlacedComponent = {
       ...componentConfig,
-      instanceId: `${componentId}-${Date.now()}`,
+      instanceId: `${componentId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       x: dropX,
       y: dropY,
       rotation: 0,
@@ -1212,7 +1384,7 @@ export const SimulationCanvas = () => {
       }
 
       const newWire: Wire = {
-        id: `wire-${Date.now()}`,
+        id: `wire-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
         startX: drawingWire.startX,
         startY: drawingWire.startY,
         endX: absolutePos.x,
@@ -2032,6 +2204,8 @@ export const SimulationCanvas = () => {
         getLCDEngine().onPinChange(pin, value, Date.now());
         getUltrasonicEngine().onPinChange(pin, value, Date.now());
         getTurbidityEngine().onPinChange(pin, value, Date.now());
+        getServoEngine().onPinChange(pin, value, getSimulationClock().getMicros());
+        // ✅ REMOVED: updateServoAngle() - now called in animation loop at 60fps
         setForceUpdate(prev => prev + 1);
       });
 
@@ -2040,6 +2214,7 @@ export const SimulationCanvas = () => {
       registerLCDComponents();
       registerUltrasonicComponents();
       registerTurbidityProbes();
+      registerServoComponents();
       console.log('✅ Component registration complete');
 
       if (useAVR8js) {
@@ -2054,7 +2229,15 @@ export const SimulationCanvas = () => {
         // Use AVR8.js for accurate emulation
         console.log('🎮 Initializing AVR8.js emulator...');
         addDebugLog('info', 'Initializing AVR8.js emulator...');
-        const emulator = new AVR8jsWrapper(hal);
+
+        let emulator;
+        try {
+          emulator = new AVR8jsWrapper(hal);
+          console.log('✅ AVR8jsWrapper constructor completed successfully');
+        } catch (error) {
+          console.error('❌ AVR8jsWrapper constructor FAILED:', error);
+          throw error;
+        }
 
         console.log('📦 Loading HEX with', result.binaryData?.length || 0, 'segments...');
         addDebugLog('info', `Loading ${result.binaryData?.length || 0} HEX segments...`);
@@ -2062,6 +2245,46 @@ export const SimulationCanvas = () => {
         console.log('🔍 First segment data type:', Array.isArray(result.binaryData?.[0]?.data) ? 'Array' : typeof result.binaryData?.[0]?.data);
         console.log('🔍 First segment data length:', result.binaryData?.[0]?.data?.length);
         emulator.loadHex(result.binaryData as HexSegment[]);
+
+        // ✅ PARSE SERVO ANGLES FROM CODE
+        // Extract myServo.write(X) angles from the uploaded sketch
+        const servoWriteRegex = /(?:servo|myservo|myServo)\s*\.\s*write\s*\(\s*(\d+)\s*\)/gi;
+        const servoAngles: number[] = [];
+        let servoMatch;
+        while ((servoMatch = servoWriteRegex.exec(code)) !== null) {
+          const angle = parseInt(servoMatch[1]);
+          if (angle >= 0 && angle <= 180) {
+            servoAngles.push(angle);
+          }
+        }
+
+        if (servoAngles.length > 0) {
+          console.log(`🎯 SERVO ANGLES PARSED FROM CODE: [${servoAngles.join('°, ')}°]`);
+          // Pass angles to emulator for smooth animation
+          emulator.setServoAngles(servoAngles);
+        } else {
+          console.log('ℹ️ No myServo.write() calls found in code - using default angles');
+        }
+
+        // ✅ PARSE DELAYS FROM CODE (for servo animation timing)
+        // Extract delay(X) values from the loop() function
+        const delayRegex = /delay\s*\(\s*(\d+)\s*\)/gi;
+        const servoDelays: number[] = [];
+        let delayMatch;
+        while ((delayMatch = delayRegex.exec(code)) !== null) {
+          const delayMs = parseInt(delayMatch[1]);
+          if (delayMs > 0) {
+            servoDelays.push(delayMs);
+          }
+        }
+
+        if (servoDelays.length > 0) {
+          console.log(`⏱️ DELAYS PARSED FROM CODE: [${servoDelays.map(d => d + 'ms').join(', ')}]`);
+          // Pass delays to emulator for accurate timing
+          emulator.setServoDelays(servoDelays);
+        } else {
+          console.log('ℹ️ No delay() calls found in code - using default 1 second delay');
+        }
 
         // ✅ FIX 3: CRITICAL - Reset LCD BEFORE starting AVR!
         // lcd.begin() happens in setup() - if we reset LCD after, commands are lost
@@ -2143,16 +2366,9 @@ export const SimulationCanvas = () => {
    * Unified upload handler - chooses between compiler modes
    */
   const handleUploadCode = async (code: string): Promise<boolean> => {
-    if (useCompilerMode) {
-      // Use real Arduino CLI + AVR8.js compilation
-      console.log('📤 Using real compiler mode (Arduino CLI + AVR8.js)');
-      return await executeCodeWithCompiler(code);
-    } else {
-      // Use regex-based simple compilation
-      console.log('📤 Using simple mode (regex-based)');
-      executeCode(code);
-      return true; // Simple mode always succeeds
-    }
+    // Use real Arduino CLI + AVR8.js compilation with improved loop detection
+    console.log('📤 Using AVR8.js compiler mode (with infinite loop detection)');
+    return await executeCodeWithCompiler(code);
   };
   const startEmulatorLoop = (emulator: AVREmulator) => {
     if (emulatorIntervalRef.current) clearInterval(emulatorIntervalRef.current);
@@ -2206,6 +2422,11 @@ export const SimulationCanvas = () => {
 
       // ✨ CRITICAL: Check for port changes to detect digitalWrite()!
       emulator.checkPortChanges();
+
+      // 🦾 SERVO PHYSICS UPDATE: Call at animation frame rate (~60fps)
+      // This ensures deltaTime is meaningful (16ms instead of ~0ms)
+      // Moved from step() where it was called billions of times/sec
+      getServoEngine().updateServoAngle();
 
       if (executed === 0) {
         console.log('❌ Emulator returned 0 cycles - stopping');
@@ -2383,12 +2604,48 @@ export const SimulationCanvas = () => {
         console.log(`analogRead: Pin ${pin} detected`);
       }
 
-      // Parse Servo functions
-      const servoWriteRegex = /(?:servo|myservo)\.write\s*\(\s*(\d+)\s*\)/gi;
+      // ═══════════════════════════════════════════════════════════════════
+      // 🎛️ SERVO LIBRARY EMULATION (Simple Mode)
+      // ═══════════════════════════════════════════════════════════════════
+
+      // Parse Servo.attach(pin) to get which pin the servo is on
+      const servoAttachRegex = /(?:servo|myservo|myServo)\s*\.\s*attach\s*\(\s*(\d+)\s*\)/gi;
+      let servoPin: string | null = null;
+      while ((match = servoAttachRegex.exec(code)) !== null) {
+        servoPin = match[1];
+        console.log(`🔧 Servo.attach() detected: Pin ${servoPin}`);
+      }
+
+      // Parse Servo.write(angle) to get servo angles
+      const servoWriteRegex = /(?:servo|myservo|myServo)\s*\.\s*write\s*\(\s*(\d+)\s*\)/gi;
+      const servoAngles: number[] = [];
       while ((match = servoWriteRegex.exec(code)) !== null) {
         const angle = parseInt(match[1]);
+        servoAngles.push(angle);
         servoPositions["servo"] = angle;
-        console.log(`Servo write: ${angle} degrees`);
+        console.log(`🎛️ Servo.write() detected: ${angle}°`);
+      }
+
+      // If we have a servo pin and angles, register with ServoEngine
+      if (servoPin && servoAngles.length > 0) {
+        console.log(`✅ Servo emulation active: Pin ${servoPin}, Angles: ${servoAngles.join(', ')}`);
+
+        // Register servo components with ServoEngine
+        registerServoComponents();
+
+        // Get the ServoEngine and simulate servo movement
+        const servoEngine = getServoEngine();
+
+        // Simulate PWM pulses for each angle
+        // Servo library converts angle to pulse width: 0° = 544µs, 90° = 1500µs, 180° = 2400µs
+        servoAngles.forEach((angle, index) => {
+          const pulseWidth = 544 + (angle / 180) * (2400 - 544); // Map 0-180° to 544-2400µs
+          console.log(`📡 Simulating servo pulse: ${angle}° → ${Math.round(pulseWidth)}µs`);
+
+          // Trigger servo movement via PWM router
+          const router = getPWMRouter();
+          router.generatePulse(parseInt(servoPin!), Math.round(pulseWidth), 50);
+        });
       }
 
       // ═══════════════════════════════════════════════════════════════════
@@ -3248,7 +3505,7 @@ export const SimulationCanvas = () => {
           {/* Render all placed components */}
           {placedComponents.map((component) => (
             <div
-              key={`${component.instanceId}-${forceUpdate}`}
+              key={component.instanceId}
               onDoubleClick={() => handleWaterChamberDoubleClick(component)}
             >
               <UniversalComponent
@@ -3277,6 +3534,12 @@ export const SimulationCanvas = () => {
                       return state;
                     })()
                     : false
+                }
+                servoAngle={
+                  // 🦾 Pass servo angle from state for servo components
+                  component.id.includes("servo") && isSimulating
+                    ? servoAngles[component.instanceId] ?? 90
+                    : undefined
                 }
               />
 

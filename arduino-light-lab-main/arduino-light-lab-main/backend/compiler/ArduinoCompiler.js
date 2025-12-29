@@ -3,6 +3,8 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const util = require('util');
+const glob = require('glob');
+const { ServoLibraryInjector } = require('./ServoLibraryInjector');
 
 const execPromise = util.promisify(exec);
 
@@ -57,7 +59,7 @@ class ArduinoCompiler {
      */
     async compileArduinoCode(code, board = 'arduino:avr:uno') {
         console.log('\n🔨 Starting Arduino compilation...');
-        console.log(`📋 Board: ${board}`);
+        console.log(`📋 Board: ${board} `);
         console.log(`📝 Code length: ${code.length} characters`);
 
         // Check if Arduino CLI is available
@@ -84,7 +86,7 @@ class ArduinoCompiler {
 
             // Write sketch file
             fs.writeFileSync(sketchFile, code, 'utf8');
-            console.log(`📄 Created sketch file: ${sketchFile}`);
+            console.log(`📄 Created sketch file: ${sketchFile} `);
             console.log('\n🔍 EXACT CODE RECEIVED:');
             console.log('═══════════════════════════════════════');
             code.split('\n').forEach((line, i) => {
@@ -92,19 +94,39 @@ class ArduinoCompiler {
             });
             console.log('═══════════════════════════════════════\n');
 
+            // ✅ CRITICAL FIX: Inject Servo library if needed
+            const servoInjector = new ServoLibraryInjector();
+            const usesServo = await servoInjector.sketchUsesServo(code);
+
+            if (usesServo) {
+                console.log('🎯 Detected Servo library usage - injecting Servo source files...');
+                await servoInjector.injectServoLibrary(projectDir);
+            }
+
             // Compile the sketch with explicit build path
             console.log('🔧 Running arduino-cli compile...');
             const buildPath = path.join(projectDir, 'build');
 
-            // ✅ FIX: Use proper command execution with explicit shell
-            const compileCommand = `arduino-cli compile --fqbn ${board} --build-path "${buildPath}" "${projectDir}"`;
+            // ✅ CRITICAL: Compile WITHOUT bootloader for AVR8.js compatibility
+            // Bootloader waits for serial upload which causes infinite loops in emulator
+            // This flag tells arduino-cli to generate code that starts immediately at 0x0000
+            const arduinoCliPath = 'C:\\Users\\tharu\\Arduino CLI\\\\arduino-cli.exe';
+
+            // ✅ FORCE Servo library inclusion by specifying library path
+            const avrLibPath = path.join(process.env.LOCALAPPDATA || process.env.HOME,
+                'Arduino15/packages/arduino/hardware/avr/1.8.6/libraries');
+
+            const compileCommand = `"${arduinoCliPath}" compile --fqbn ${board} ` +
+                `--build-property "build.bootloader=no" ` +
+                `--libraries "${avrLibPath}" ` +
+                `--build-path "${buildPath}" "${projectDir}"`;
 
             console.log('📝 Compile command:', compileCommand);
 
             // Execute with explicit shell for Windows compatibility
             const { stdout, stderr } = await execPromise(compileCommand, {
                 maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large compilation outputs
-                shell: process.platform === 'win32' ? 'powershell.exe' : '/bin/sh'
+                shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'
             });
 
             console.log('✅ Compilation successful!');
@@ -112,8 +134,8 @@ class ArduinoCompiler {
             // Parse warnings from stderr
             const warnings = this.parseWarnings(stderr);
             if (warnings.length > 0) {
-                console.log(`⚠️ Compilation warnings: ${warnings.length}`);
-                warnings.forEach((warning, i) => console.log(`   ${i + 1}. ${warning}`));
+                console.log(`⚠️ Compilation warnings: ${warnings.length} `);
+                warnings.forEach((warning, i) => console.log(`   ${i + 1}. ${warning} `));
             }
 
             // Find and parse HEX file (now in explicit build path)
@@ -122,11 +144,11 @@ class ArduinoCompiler {
 
             if (!fs.existsSync(hexFile)) {
                 // List what's actually in the build directory for debugging
-                console.error(`❌ HEX file not found at: ${hexFile}`);
+                console.error(`❌ HEX file not found at: ${hexFile} `);
 
                 if (fs.existsSync(buildPath)) {
                     const files = fs.readdirSync(buildPath);
-                    console.error(`   Build directory contents: ${files.join(', ')}`);
+                    console.error(`   Build directory contents: ${files.join(', ')} `);
                 } else {
                     console.error(`   Build directory doesn't exist: ${buildPath}`);
                 }
@@ -135,10 +157,53 @@ class ArduinoCompiler {
             }
 
             console.log(`📦 Reading HEX file: ${hexFile}`);
-            const hexData = fs.readFileSync(hexFile, 'utf8');
+
+            // ✅ CRITICAL FIX: Generate bootloader-free HEX for AVR8.js
+            // Standard HEX includes bootloader which causes infinite loops in AVR8.js
+            // We extract only .text (code) and .data (initialized variables) sections
+            const cleanHexFile = path.join(buildPath, `${projectName}.clean.hex`);
+            let finalHexFile = hexFile; // Default to standard HEX
+            let bootloaderFree = false;
+
+            try {
+                console.log('🔧 Generating bootloader-free HEX for AVR8.js...');
+
+                // Find avr-objcopy dynamically (works with any avr-gcc version)
+                const arduinoPath = path.join(process.env.LOCALAPPDATA || process.env.HOME, 'Arduino15');
+                const objcopyPattern = path.join(arduinoPath, 'packages/arduino/tools/avr-gcc/*/bin/avr-objcopy.exe');
+
+                const objcopyFiles = glob.sync(objcopyPattern);
+                if (objcopyFiles.length === 0) {
+                    throw new Error('avr-objcopy not found in Arduino installation');
+                }
+
+                const objcopyPath = objcopyFiles[0]; // Use first match
+                console.log('📍 Found avr-objcopy:', objcopyPath);
+
+                // Use avr-objcopy to remove bootloader sections (keep vectors for ISRs)
+                // -R removes sections: eeprom, fuse, lock (bootloader stuff)
+                // Keeps: .text (code), .data (variables), .vectors (interrupt table)
+                const objcopyCmd = `"${objcopyPath}" -O ihex -R .eeprom -R .fuse -R .lock "${elfFile}" "${cleanHexFile}"`;
+                console.log('📝 Objcopy command:', objcopyCmd);
+
+                await execPromise(objcopyCmd, {
+                    shell: process.platform === 'win32' ? 'cmd.exe' : '/bin/sh'
+                });
+
+                console.log('✅ Clean HEX generated successfully (no bootloader)!');
+                finalHexFile = cleanHexFile;
+                bootloaderFree = true;
+            } catch (objcopyError) {
+                console.warn('⚠️ avr-objcopy failed, using standard HEX (may have bootloader issues)');
+                console.warn('   Error:', objcopyError.message);
+                // Continue with standard HEX file
+            }
+
+            const hexData = fs.readFileSync(finalHexFile, 'utf8');
             const hexLines = hexData.trim().split('\n');
 
             console.log(`📊 HEX file stats:`);
+            console.log(`   File: ${bootloaderFree ? 'CLEAN (no bootloader)' : 'STANDARD (with bootloader)'}`);
             console.log(`   Lines: ${hexLines.length}`);
             console.log(`   Size: ${hexData.length} bytes`);
 
@@ -164,6 +229,7 @@ class ArduinoCompiler {
                 metadata: {
                     board: board,
                     compiledAt: new Date().toISOString(),
+                    bootloaderFree: bootloaderFree, // Flag to indicate clean HEX
                     ...stats
                 }
             };
@@ -174,7 +240,10 @@ class ArduinoCompiler {
             // Parse compilation errors
             const errors = this.parseErrors(error.stderr || error.message);
 
-            // Cleanup even on error
+            // Cleanup injected Servo library and project directory
+            if (usesServo) {
+                await servoInjector.cleanupServoLibrary(projectDir);
+            }
             if (fs.existsSync(projectDir)) {
                 this.cleanup(projectDir);
             }

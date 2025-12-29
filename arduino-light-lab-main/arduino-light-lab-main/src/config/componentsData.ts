@@ -414,12 +414,12 @@ export const COMPONENT_DATA: ComponentConfig[] = [
     category: "actuators",
     description: "9g Micro Servo Motor",
     pins: [
-      { id: "signal", label: "SIGNAL", x: 0, y: 0, type: "digital" },
-      { id: "vcc", label: "VCC", x: 0, y: 15, type: "power" },
-      { id: "gnd", label: "GND", x: 0, y: 30, type: "ground" },
+      { id: "signal", label: "SIGNAL", x: 11, y: 53, type: "digital" },
+      { id: "vcc", label: "VCC", x: 11, y: 62, type: "power" },
+      { id: "gnd", label: "GND", x: 10, y: 70, type: "ground" },
     ],
-    width: 70,
-    height: 50,
+    width: 100,
+    height: 120,
     imagePath: "/components/servo-sg90.svg",
   },
   {
