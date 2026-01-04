@@ -15,6 +15,7 @@ import { CPU, avrInstruction } from 'avr8js';
 import { HardwareAbstractionLayer } from './HardwareAbstractionLayer';
 import { Timer0Emulator } from './Timer0Emulator';
 import { Timer1Emulator } from './Timer1Emulator';
+import { TWIEmulator } from './TWIEmulator';
 import { getServoEngine } from '../simulation/ServoEngine';
 import { getSimulationClock } from './SimulationClock';
 
@@ -28,6 +29,7 @@ export class AVR8jsWrapper {
     private hal: HardwareAbstractionLayer;
     private timer0: Timer0Emulator;
     private timer1: Timer1Emulator;
+    private twi: TWIEmulator;  // TWI (I2C) peripheral for OLED
     private running: boolean = false;
     private cycleCount: number = 0;
 
@@ -116,6 +118,9 @@ export class AVR8jsWrapper {
         // Initialize Timer 1 (used by Servo library, analogWrite on pins 9/10)
         this.timer1 = new Timer1Emulator();
 
+        // Initialize TWI (I2C) peripheral for OLED and other I2C devices
+        this.twi = new TWIEmulator(this.cpu);
+
         console.log('🎮 AVR8js emulator initialized');
         console.log(`   Flash: ${this.FLASH_SIZE} bytes`);
         console.log(`   SRAM: ${this.SRAM_SIZE} bytes`);
@@ -187,6 +192,7 @@ export class AVR8jsWrapper {
         this.prevICR1 = 0;
         this.timer0.reset();
         this.timer1.reset();
+        this.twi.reset();
 
         // ✅ Reset infinite loop detection state
         this.pcHistory = [];
@@ -259,6 +265,7 @@ export class AVR8jsWrapper {
             this.timer0.tick(cyclesUsed, this.cpu.data);
 
             this.timer1.tick(cyclesUsed, this.cpu.data); // Generates PWM pulses
+            this.twi.tick();  // Process I2C (TWI) transactions for OLED
             this.checkPortChanges();
 
             // Check registers manually (Wokwi fallback approach)

@@ -79,6 +79,10 @@ class ArduinoCompiler {
         const projectDir = path.join(this.tempDir, projectName);
         const sketchFile = path.join(projectDir, `${projectName}.ino`);
 
+        // ✅ CRITICAL FIX: Declare these outside try block so catch can access them
+        const servoInjector = new ServoLibraryInjector();
+        let usesServo = false;
+
         try {
             // Create project directory
             fs.mkdirSync(projectDir, { recursive: true });
@@ -94,9 +98,8 @@ class ArduinoCompiler {
             });
             console.log('═══════════════════════════════════════\n');
 
-            // ✅ CRITICAL FIX: Inject Servo library if needed
-            const servoInjector = new ServoLibraryInjector();
-            const usesServo = await servoInjector.sketchUsesServo(code);
+            // Check if sketch uses Servo library
+            usesServo = await servoInjector.sketchUsesServo(code);
 
             if (usesServo) {
                 console.log('🎯 Detected Servo library usage - injecting Servo source files...');

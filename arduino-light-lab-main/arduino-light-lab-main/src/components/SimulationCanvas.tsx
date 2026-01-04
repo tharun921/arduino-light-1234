@@ -8,6 +8,7 @@ import { CodeEditor } from "./CodeEditor";
 import { DebugConsole, DebugLog } from "./DebugConsole";
 import { getUltrasonicEngine } from "../simulation/UltrasonicEngine";
 import { getLCDEngine } from "../simulation/LCDEngine";
+import { getOLEDEngine } from "../simulation/OLEDEngine";
 import { getTurbidityEngine, TurbidityEngine, MediumType } from "../simulation/TurbidityEngine";
 import { getServoEngine } from "../simulation/ServoEngine";
 import { simulateLCDFromCode } from "../simulation/LCDHardwareSimulator";
@@ -73,6 +74,7 @@ export const SimulationCanvas = () => {
     code?: string;
     timestamp?: number;
     hasLCD?: boolean;
+    hasOLED?: boolean; // Track OLED I2C display usage
     lcdText?: { line1: string; line2: string }; // LCD display text
     serialOutput?: string[];
     sensorValues?: Record<string, number>;
@@ -162,6 +164,346 @@ export const SimulationCanvas = () => {
   useEffect(() => {
     updatePinConnections();
   }, [wires, placedComponents]); // Re-run when wires or components change
+
+  // ═══════════════════════════════════════════════════════════════════
+  // 🖥️ OLED COMPONENT REGISTRATION
+  // ═══════════════════════════════════════════════════════════════════
+  // Automatically register OLED components when simulation is running
+  useEffect(() => {
+    if (!isSimulating) return;
+
+    const oledComponents = placedComponents.filter(c => c.id.includes("oled"));
+    if (oledComponents.length === 0) return;
+
+    console.log('🖥️ OLED useEffect: Checking OLED registration...');
+    const oledEngine = getOLEDEngine();
+
+    // Check if OLEDs are already registered
+    if (!oledEngine.hasOLEDs()) {
+      console.log('🖥️ OLED useEffect: No OLEDs registered, registering now...');
+
+      // Register each OLED with default I2C pins
+      oledComponents.forEach(oled => {
+        oledEngine.registerOLED(oled.instanceId, { sda: 18, scl: 19 }, 0x3C);
+        console.log(`🖥️ OLED registered via useEffect: ${oled.instanceId}`);
+      });
+    }
+
+    // Show content on OLED
+    setTimeout(() => {
+      console.log('🖥️ OLED setTimeout: Running...');
+      console.log('🖥️ OLED: hasOLEDs =', oledEngine.hasOLEDs());
+      console.log('🖥️ OLED: compiledCode =', compiledCode);
+      console.log('🖥️ OLED: compiledCode?.code type =', typeof compiledCode?.code);
+
+      if (oledEngine.hasOLEDs()) {
+        // Check for code in compiledCode.code OR currentCode (the source code)
+        const codeToCheck = compiledCode?.code || currentCode || '';
+        console.log('🖥️ OLED: Code to check (first 200 chars):', codeToCheck.substring(0, 200));
+
+        if (codeToCheck) {
+          // Parse setTextColor to get the color
+          const colorRegex = /display\.setTextColor\s*\(\s*(\w+)/gi;
+          const colorMatch = colorRegex.exec(codeToCheck);
+          const textColor = colorMatch ? colorMatch[1].toUpperCase() : 'WHITE';
+          console.log(`🖥️ OLED: Text color = ${textColor}`);
+
+          // Parse setTextSize to get scale
+          const sizeRegex = /display\.setTextSize\s*\(\s*(\d+)/gi;
+          const sizeMatch = sizeRegex.exec(codeToCheck);
+          const textSize = sizeMatch ? parseInt(sizeMatch[1]) : 1;
+          console.log(`🖥️ OLED: Text size = ${textSize}`);
+
+          // Set color on all OLEDs
+          oledEngine.setColorAll(textColor);
+
+          // ✅ NEW: Detect scrolling patterns in the code
+          // Look for patterns like: x--, scrollX--, posX--, etc.
+          const hasSoftwareScroll =
+            /\w*[xX]\s*--/.test(codeToCheck) ||      // x--, scrollX--, posX-- (scroll left)
+            /\w*[xX]\s*\+\+/.test(codeToCheck) ||    // x++, scrollX++ (scroll right)
+            /--\s*\w*[xX]\b/.test(codeToCheck) ||    // --x, --scrollX (scroll left)
+            /\+\+\s*\w*[xX]\b/.test(codeToCheck) ||  // ++x, ++scrollX (scroll right)
+            /\w*[xX]\s*-=/.test(codeToCheck) ||      // x -= n, scrollX -= n (scroll left)
+            /\w*[xX]\s*\+=/.test(codeToCheck);       // x += n, scrollX += n (scroll right)
+
+          const hasHardwareScroll =
+            /startscrollleft/i.test(codeToCheck) ||  // Hardware scroll left
+            /startscrollright/i.test(codeToCheck);   // Hardware scroll right
+
+          const hasScrollPattern = hasSoftwareScroll || hasHardwareScroll;
+
+          // Determine scroll direction
+          const isLeftScroll = /\w*[xX]\s*--/.test(codeToCheck) || /--\s*\w*[xX]\b/.test(codeToCheck) || /\w*[xX]\s*-=/.test(codeToCheck) || /startscrollleft/i.test(codeToCheck);
+          const scrollDirection = isLeftScroll ? 'left' : 'right';
+
+          // Parse delay value for scroll speed - ONLY for software scrolling
+          // For hardware scroll, use default fast speed (30ms)
+          let scrollDelay = 30; // Default fast speed
+
+          if (hasSoftwareScroll && !hasHardwareScroll) {
+            // Look for delay() near the x-- pattern (in the loop)
+            const delayRegex = /delay\s*\(\s*(\d+)\s*\)/gi;
+            const delayMatch = delayRegex.exec(codeToCheck);
+            if (delayMatch) {
+              const delayVal = parseInt(delayMatch[1]);
+              // Only use if it's a reasonable scroll delay (< 200ms)
+              if (delayVal < 200) {
+                scrollDelay = delayVal;
+              }
+            }
+          }
+
+          console.log(`🖥️ OLED: Scroll pattern detected = ${hasScrollPattern} (hardware=${hasHardwareScroll}), direction = ${scrollDirection}, delay = ${scrollDelay}ms`);
+
+          // ═══════════════════════════════════════════════════════════════════
+          // Parse display content more intelligently
+          // ═══════════════════════════════════════════════════════════════════
+
+          // 1. Try to find scrollText variable definition (for complex scripts)
+          const scrollTextRegex = /(?:String\s+)?scrollText\s*=\s*["']([^"']+)["']/i;
+          const scrollTextMatch = scrollTextRegex.exec(codeToCheck);
+          const scrollTextValue = scrollTextMatch ? scrollTextMatch[1] : null;
+
+          // 2. Split code into setup() and loop() sections
+          const setupMatch = codeToCheck.match(/void\s+setup\s*\(\s*\)\s*\{([\s\S]*?)(?=void\s+loop|$)/i);
+          const loopMatch = codeToCheck.match(/void\s+loop\s*\(\s*\)\s*\{([\s\S]*?)$/i);
+
+          const setupCode = setupMatch ? setupMatch[1] : '';
+          const loopCode = loopMatch ? loopMatch[1] : '';
+
+          // 3. Parse prints from setup() - these are STATIC text
+          const printRegex = /display\.(print|println)\s*\(\s*["']([^"']*?)["']\s*\)/gi;
+          const staticTexts: { text: string; row: number }[] = [];
+          let match;
+
+          // Reset regex
+          printRegex.lastIndex = 0;
+          while ((match = printRegex.exec(setupCode)) !== null) {
+            const text = match[2];
+            if (text) {
+              // Try to find row from preceding setCursor or oledSetCursor
+              const beforeMatch = setupCode.substring(0, match.index);
+              const cursorMatch = beforeMatch.match(/(?:oled)?setCursor\s*\(\s*\d+\s*,\s*(\d+)\s*\)/gi);
+              let row = staticTexts.length; // Default: sequential rows
+              if (cursorMatch && cursorMatch.length > 0) {
+                const lastCursor = cursorMatch[cursorMatch.length - 1];
+                const rowMatch = lastCursor.match(/,\s*(\d+)\s*\)/);
+                if (rowMatch) row = parseInt(rowMatch[1]);
+              }
+              staticTexts.push({ text, row });
+              console.log(`🖥️ OLED: Static text in setup(): "${text}" at row ${row}`);
+            }
+          }
+
+          // 4. Determine scrolling text
+          let scrollingText = scrollTextValue; // Use scrollText variable if found
+
+          if (!scrollingText && loopCode) {
+            // Look for prints with scrollX or similar in loop
+            printRegex.lastIndex = 0;
+            while ((match = printRegex.exec(loopCode)) !== null) {
+              const text = match[2];
+              if (text) {
+                scrollingText = text;
+                console.log(`🖥️ OLED: Scrolling text in loop(): "${text}"`);
+              }
+            }
+          }
+
+          // ═══════════════════════════════════════════════════════════════════
+          // 6. Parse bitmap definitions and drawBitmap calls
+          // ═══════════════════════════════════════════════════════════════════
+          const bitmapDefs = new Map<string, number[]>();
+
+          // Parse PROGMEM array definitions - handles multi-line with 's' flag (dotall)
+          // Format: const unsigned char myBitmap[] PROGMEM = { 0xFF, 0b11111111, ... };
+          const progmemRegex = /(?:const\s+)?(?:unsigned\s+)?(?:char|uint8_t)\s+(\w+)\s*\[\s*(?:\d+)?\s*\]\s*(?:PROGMEM)?\s*=\s*\{([\s\S]*?)\}/gi;
+          let progmemMatch;
+
+          console.log('🖼️ OLED: Searching for PROGMEM arrays in code...');
+
+          while ((progmemMatch = progmemRegex.exec(codeToCheck)) !== null) {
+            const arrayName = progmemMatch[1];
+            const bytesStr = progmemMatch[2];
+
+            console.log(`🖼️ OLED: Found array "${arrayName}" with data: ${bytesStr.substring(0, 50)}...`);
+
+            // Parse the bytes (supports 0xFF, 0b11111111, 255 formats)
+            const bytes: number[] = [];
+            const byteMatches = bytesStr.matchAll(/0x([0-9a-fA-F]+)|0b([01]+)|(\d+)/g);
+            for (const m of byteMatches) {
+              if (m[1]) bytes.push(parseInt(m[1], 16));      // Hex
+              else if (m[2]) bytes.push(parseInt(m[2], 2));  // Binary
+              else if (m[3]) bytes.push(parseInt(m[3], 10)); // Decimal
+            }
+
+            if (bytes.length > 0) {
+              bitmapDefs.set(arrayName, bytes);
+              console.log(`🖥️ OLED: Found bitmap "${arrayName}" with ${bytes.length} bytes`);
+            }
+          }
+
+          // Parse drawBitmap calls: display.drawBitmap(x, y, bitmapName, w, h, color)
+          const drawBitmapRegex = /display\.drawBitmap\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\w+)\s*,\s*(\d+)\s*,\s*(\d+)/gi;
+          let bitmapMatch;
+          let hasBitmaps = false; // Track if any bitmaps were drawn
+          while ((bitmapMatch = drawBitmapRegex.exec(codeToCheck)) !== null) {
+            const x = parseInt(bitmapMatch[1]);
+            const y = parseInt(bitmapMatch[2]);
+            const bitmapName = bitmapMatch[3];
+            const w = parseInt(bitmapMatch[4]);
+            const h = parseInt(bitmapMatch[5]);
+
+            const bitmapData = bitmapDefs.get(bitmapName);
+            if (bitmapData) {
+              console.log(`🖥️ OLED: Drawing bitmap "${bitmapName}" at (${x}, ${y}), size ${w}x${h}`);
+              oledEngine.drawBitmapAll(x, y, bitmapData, w, h);
+              hasBitmaps = true;
+            } else {
+              console.log(`🖥️ OLED: Bitmap "${bitmapName}" not found in PROGMEM arrays`);
+            }
+          }
+
+          // ═══════════════════════════════════════════════════════════════════
+          // 7. Parse graphics drawing calls
+          // ═══════════════════════════════════════════════════════════════════
+          let hasGraphics = false;
+
+          // Parse drawLine: display.drawLine(x0, y0, x1, y1, color)
+          const lineRegex = /display\.drawLine\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi;
+          let lineMatch;
+          while ((lineMatch = lineRegex.exec(codeToCheck)) !== null) {
+            const x0 = parseInt(lineMatch[1]);
+            const y0 = parseInt(lineMatch[2]);
+            const x1 = parseInt(lineMatch[3]);
+            const y1 = parseInt(lineMatch[4]);
+            console.log(`🖼️ OLED: Drawing line (${x0},${y0}) to (${x1},${y1})`);
+            oledEngine.drawLineAll(x0, y0, x1, y1);
+            hasGraphics = true;
+          }
+
+          // Parse drawRect: display.drawRect(x, y, w, h, color)
+          const rectRegex = /display\.drawRect\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi;
+          let rectMatch;
+          while ((rectMatch = rectRegex.exec(codeToCheck)) !== null) {
+            const x = parseInt(rectMatch[1]);
+            const y = parseInt(rectMatch[2]);
+            const w = parseInt(rectMatch[3]);
+            const h = parseInt(rectMatch[4]);
+            console.log(`🖼️ OLED: Drawing rectangle at (${x},${y}) size ${w}x${h}`);
+            oledEngine.drawRectAll(x, y, w, h);
+            hasGraphics = true;
+          }
+
+          // Parse fillRect: display.fillRect(x, y, w, h, color)
+          const fillRectRegex = /display\.fillRect\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi;
+          let fillRectMatch;
+          while ((fillRectMatch = fillRectRegex.exec(codeToCheck)) !== null) {
+            const x = parseInt(fillRectMatch[1]);
+            const y = parseInt(fillRectMatch[2]);
+            const w = parseInt(fillRectMatch[3]);
+            const h = parseInt(fillRectMatch[4]);
+            console.log(`🖼️ OLED: Filling rectangle at (${x},${y}) size ${w}x${h}`);
+            oledEngine.fillRectAll(x, y, w, h);
+            hasGraphics = true;
+          }
+
+          // Parse drawCircle: display.drawCircle(x, y, r, color)
+          const circleRegex = /display\.drawCircle\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi;
+          let circleMatch;
+          while ((circleMatch = circleRegex.exec(codeToCheck)) !== null) {
+            const x = parseInt(circleMatch[1]);
+            const y = parseInt(circleMatch[2]);
+            const r = parseInt(circleMatch[3]);
+            console.log(`🖼️ OLED: Drawing circle at (${x},${y}) radius ${r}`);
+            oledEngine.drawCircleAll(x, y, r);
+            hasGraphics = true;
+          }
+
+          // Parse fillCircle: display.fillCircle(x, y, r, color)
+          const fillCircleRegex = /display\.fillCircle\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi;
+          let fillCircleMatch;
+          while ((fillCircleMatch = fillCircleRegex.exec(codeToCheck)) !== null) {
+            const x = parseInt(fillCircleMatch[1]);
+            const y = parseInt(fillCircleMatch[2]);
+            const r = parseInt(fillCircleMatch[3]);
+            console.log(`🖼️ OLED: Filling circle at (${x},${y}) radius ${r}`);
+            oledEngine.fillCircleAll(x, y, r);
+            hasGraphics = true;
+          }
+
+          // Parse drawTriangle: display.drawTriangle(x0, y0, x1, y1, x2, y2, color)
+          const triangleRegex = /display\.drawTriangle\s*\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/gi;
+          let triangleMatch;
+          while ((triangleMatch = triangleRegex.exec(codeToCheck)) !== null) {
+            const x0 = parseInt(triangleMatch[1]);
+            const y0 = parseInt(triangleMatch[2]);
+            const x1 = parseInt(triangleMatch[3]);
+            const y1 = parseInt(triangleMatch[4]);
+            const x2 = parseInt(triangleMatch[5]);
+            const y2 = parseInt(triangleMatch[6]);
+            console.log(`🖼️ OLED: Drawing triangle at (${x0},${y0}), (${x1},${y1}), (${x2},${y2})`);
+            oledEngine.drawTriangleAll(x0, y0, x1, y1, x2, y2);
+            hasGraphics = true;
+          }
+
+          // Parse invertDisplay: display.invertDisplay(true/false)
+          const invertRegex = /display\.invertDisplay\s*\(\s*(true|false|1|0)/gi;
+          const invertMatch = invertRegex.exec(codeToCheck);
+          if (invertMatch) {
+            const invert = invertMatch[1] === 'true' || invertMatch[1] === '1';
+            console.log(`🖼️ OLED: Inverting display = ${invert}`);
+            oledEngine.invertDisplayAll(invert);
+          }
+
+          // Parse setRotation: display.setRotation(0/1/2/3)
+          const rotationRegex = /display\.setRotation\s*\(\s*(\d)/gi;
+          const rotationMatch = rotationRegex.exec(codeToCheck);
+          if (rotationMatch) {
+            const rotation = parseInt(rotationMatch[1]) % 4;
+            console.log(`🖼️ OLED: Setting rotation = ${rotation * 90}°`);
+            oledEngine.setRotationAll(rotation);
+          }
+
+          // 8. Display the content (skip if bitmaps/graphics were already drawn)
+
+          if (hasScrollPattern && (scrollingText || staticTexts.length > 0)) {
+            // Complex layout: static + scrolling
+            const allStaticText = staticTexts.map(s => s.text).join('\n');
+            const textToScroll = scrollingText || staticTexts[staticTexts.length - 1]?.text || '';
+
+            console.log(`🖥️ OLED: Mixed layout - Static: "${allStaticText}", Scroll: "${textToScroll}"`);
+
+            // For now, use scrolling text primarily, show static+scroll info
+            if (scrollingText) {
+              // Show static lines + scroll the designated line
+              oledEngine.displayMixedContent(staticTexts, textToScroll, textSize, scrollDirection, scrollDelay);
+            } else {
+              // Fallback: scroll all text
+              oledEngine.displayScrollingText(allStaticText, textSize, scrollDirection, scrollDelay);
+            }
+          } else if (staticTexts.length > 0) {
+            // Only static text
+            const displayText = staticTexts.map(s => s.text).join('\n');
+            console.log(`🖥️ OLED: Displaying static: "${displayText}" in ${textColor}`);
+            oledEngine.displayTextAll(displayText, textSize);
+          } else if (bitmapDefs.size > 0 || hasGraphics) {
+            // Bitmaps or graphics were drawn - don't show test pattern
+            console.log('🖥️ OLED: Graphics/bitmaps drawn, no text to display');
+          } else {
+            console.log('🖥️ OLED: No display content found in code, showing test pattern');
+            oledEngine.showTestPatternAll();
+          }
+        } else {
+          console.log('🖥️ OLED: No code available, showing test pattern');
+          oledEngine.showTestPatternAll();
+        }
+      } else {
+        console.log('🖥️ OLED: No OLEDs registered, skipping display update');
+      }
+    }, 300);
+  }, [isSimulating, placedComponents, compiledCode, currentCode]);
 
   // ═══════════════════════════════════════════════════════════════════
   // 🦾 SERVO ANIMATION LOOP (Wokwi-style)
@@ -864,6 +1206,139 @@ export const SimulationCanvas = () => {
     });
   };
 
+  // ═══════════════════════════════════════════════════════════════════
+  // 🖥️ OLED DISPLAY ENGINE INTEGRATION
+  // ═══════════════════════════════════════════════════════════════════
+  /**
+   * Registers OLED displays with the OLED engine
+   * Maps I2C pins (SDA, SCL) to Arduino pin numbers via wire connections
+   * 
+   * I2C Pin Mapping for Arduino Uno:
+   *   - SDA = A4 = Pin 18
+   *   - SCL = A5 = Pin 19
+   */
+  const registerOLEDComponents = () => {
+    console.log("🖥️ Registering OLED displays with engine...");
+    console.log(`   Total placed components: ${placedComponents.length}`);
+    console.log(`   Component IDs: ${placedComponents.map(c => c.id).join(', ')}`);
+
+    const oledEngine = getOLEDEngine();
+    const oledComponents = placedComponents.filter(c => c.id.includes("oled"));
+
+    console.log(`   Found ${oledComponents.length} OLED component(s)`);
+
+    if (oledComponents.length === 0) {
+      console.log("  No OLED displays found");
+      return;
+    }
+
+    oledComponents.forEach(oled => {
+      console.log(`🖥️ Processing ${oled.name} (${oled.instanceId})`);
+
+      // Find all wires connected to this OLED
+      const oledWires = wires.filter(wire =>
+        wire.startPinId.startsWith(oled.instanceId) ||
+        wire.endPinId.startsWith(oled.instanceId)
+      );
+
+      if (oledWires.length === 0) {
+        console.log("  No wires connected to OLED");
+        return;
+      }
+
+      // Map OLED pins to Arduino pins
+      const pinMapping: Record<string, number> = {};
+      let hasGnd = false;
+      let hasVcc = false;
+
+      oledWires.forEach(wire => {
+        // Determine which end is the OLED
+        const oledPinId = wire.startPinId.startsWith(oled.instanceId)
+          ? wire.startPinId
+          : wire.endPinId;
+
+        const arduinoPinId = wire.startPinId.includes("arduino-uno")
+          ? wire.startPinId
+          : wire.endPinId.includes("arduino-uno")
+            ? wire.endPinId
+            : null;
+
+        // Extract OLED pin name (e.g., "sda", "scl", "gnd", "vcc")
+        const oledPinName = oledPinId.split("-").pop();
+
+        // Check for power pins
+        if (oledPinName === 'gnd') {
+          hasGnd = true;
+          console.log(`  ✓ Found GND connection`);
+        }
+        if (oledPinName === 'vcc') {
+          hasVcc = true;
+          console.log(`  ✓ Found VCC connection`);
+        }
+
+        if (!arduinoPinId) return;
+
+        // Extract Arduino pin number
+        const arduinoPinStr = extractArduinoPinNumber(arduinoPinId);
+
+        if (!oledPinName || !arduinoPinStr) return;
+
+        // Convert Arduino pin string to pin number
+        // A4 = SDA = Pin 18, A5 = SCL = Pin 19
+        let arduinoPinNum: number;
+        if (arduinoPinStr.startsWith('A')) {
+          arduinoPinNum = 14 + parseInt(arduinoPinStr.substring(1), 10);
+        } else {
+          arduinoPinNum = parseInt(arduinoPinStr, 10);
+        }
+
+        if (isNaN(arduinoPinNum)) return;
+
+        pinMapping[oledPinName] = arduinoPinNum;
+        console.log(`  Mapped OLED ${oledPinName.toUpperCase()} → Arduino Pin ${arduinoPinNum}`);
+      });
+
+      // ⚡ POWER VALIDATION (warning only - still register OLED)
+      if (!hasGnd || !hasVcc) {
+        const missing = [];
+        if (!hasGnd) missing.push('GND');
+        if (!hasVcc) missing.push('VCC');
+
+        console.warn(`⚠️ OLED Power Warning: ${oled.name} - Missing: ${missing.join(' and ')}`);
+        console.warn(`   Proceeding with registration anyway for testing`);
+
+        toast.warning(`OLED: Missing ${missing.join(' and ')} - display may not work correctly`, { duration: 3000 });
+        addDebugLog('info', `OLED missing power: ${missing.join(', ')}`);
+        // Continue instead of returning
+      }
+
+      // Check if we have required I2C pins (SDA, SCL)
+      if (!pinMapping.sda || !pinMapping.scl) {
+        const missing = [];
+        if (!pinMapping.sda) missing.push('SDA');
+        if (!pinMapping.scl) missing.push('SCL');
+        console.warn(`  ⚠️ OLED missing I2C pins: ${missing.join(", ")}`);
+        console.warn(`  ⚠️ Using fallback I2C pins: SDA=18 (A4), SCL=19 (A5)`);
+
+        // Use fallback pins instead of returning
+        if (!pinMapping.sda) pinMapping.sda = 18;  // A4
+        if (!pinMapping.scl) pinMapping.scl = 19;  // A5
+
+        toast.warning(`OLED: Using default pins A4 (SDA), A5 (SCL)`, { duration: 3000 });
+        addDebugLog('info', `OLED using fallback I2C pins`);
+      }
+
+      // Register with OLED engine
+      // I2C address 0x3C is the most common for SSD1306 OLEDs
+      oledEngine.registerOLED(oled.instanceId, {
+        sda: pinMapping.sda,
+        scl: pinMapping.scl,
+      }, 0x3C);
+
+      console.log(`✅ OLED display registered: SDA=${pinMapping.sda}, SCL=${pinMapping.scl}`);
+      addDebugLog('info', `OLED registered on I2C (SDA=A${pinMapping.sda - 14}, SCL=A${pinMapping.scl - 14})`);
+    });
+  };
 
   // Handle adding a component from the library
   const handleAddComponent = (componentId: string) => {
@@ -1846,6 +2321,49 @@ export const SimulationCanvas = () => {
       registerLCDComponents();
       addDebugLog('info', 'LCD components registered with engine');
 
+      // Register OLED components with engine (I2C displays)
+      registerOLEDComponents();
+      addDebugLog('info', 'OLED components registered with engine');
+
+      // Show test pattern on OLED as fallback (ensures display works even without I2C data)
+      const oledComponents = placedComponents.filter(c => c.id.includes("oled"));
+      // Show OLED content based on parsed code
+      if (oledComponents.length > 0 && compiledCode?.code) {
+        console.log('🖥️ OLED: Parsing display.print() from uploaded code...');
+
+        // Parse display.print() or display.println() calls from the code
+        const printRegex = /display\.(print|println)\s*\(\s*["']([^"']*?)["']\s*\)/gi;
+        const oledTexts: string[] = [];
+        let match;
+
+        while ((match = printRegex.exec(compiledCode.code)) !== null) {
+          const text = match[2];
+          if (text) {
+            oledTexts.push(text);
+            console.log(`🖥️ OLED: Found display.print("${text}")`);
+          }
+        }
+
+        setTimeout(() => {
+          const oledEngine = getOLEDEngine();
+          if (oledEngine.hasOLEDs()) {
+            if (oledTexts.length > 0) {
+              // Join all print statements with newlines and display
+              const displayText = oledTexts.join('\n');
+              console.log(`🖥️ OLED: Displaying: "${displayText}"`);
+              oledEngine.displayTextAll(displayText, 1);
+            } else {
+              // Fallback to test pattern if no print statements found
+              console.log('🖥️ OLED: No display.print() found, showing fallback');
+              oledEngine.showTestPatternAll();
+            }
+            console.log('🖥️ OLED: Content displayed!');
+          } else {
+            console.warn('🖥️ OLED: No OLEDs registered with engine yet');
+          }
+        }, 200);
+      }
+
       // Update LCD component props with compiled text (only when simulation starts)
       if (compiledCode?.hasLCD && compiledCode?.lcdText) {
         // 🔍 VALIDATE: Check if LiquidCrystal pins in code match actual wiring
@@ -2202,6 +2720,7 @@ export const SimulationCanvas = () => {
           pinStates: { ...prev.pinStates, [pin.toString()]: value }
         }));
         getLCDEngine().onPinChange(pin, value, Date.now());
+        getOLEDEngine().onPinChange(pin, value);
         getUltrasonicEngine().onPinChange(pin, value, Date.now());
         getTurbidityEngine().onPinChange(pin, value, Date.now());
         getServoEngine().onPinChange(pin, value, getSimulationClock().getMicros());
@@ -2212,6 +2731,7 @@ export const SimulationCanvas = () => {
       // ✅ FIX: Register all components with their engines BEFORE starting emulator
       console.log('📡 Registering components with engines...');
       registerLCDComponents();
+      registerOLEDComponents();
       registerUltrasonicComponents();
       registerTurbidityProbes();
       registerServoComponents();
@@ -2286,17 +2806,19 @@ export const SimulationCanvas = () => {
           console.log('ℹ️ No delay() calls found in code - using default 1 second delay');
         }
 
-        // ✅ FIX 3: CRITICAL - Reset LCD BEFORE starting AVR!
-        // lcd.begin() happens in setup() - if we reset LCD after, commands are lost
-        console.log('📺 Resetting LCD engine BEFORE AVR starts...');
+        // ✅ FIX 3: CRITICAL - Reset displays BEFORE starting AVR!
+        // lcd.begin() and oled.begin() happen in setup() - if we reset after, commands are lost
+        console.log('📺 Resetting LCD and OLED engines BEFORE AVR starts...');
         getLCDEngine().resetAll();
+        getOLEDEngine().resetAll();
 
         console.log('▶️ Starting AVR8.js CPU...');
         addDebugLog('info', 'Starting AVR8.js CPU...');
 
-        // ✅ FIX #4: Reset LCD before starting emulator for clean state
-        console.log('📺 Resetting LCD engine...');
+        // ✅ FIX #4: Reset displays before starting emulator for clean state
+        console.log('📺 Resetting LCD and OLED engines...');
         getLCDEngine().resetAll();
+        getOLEDEngine().resetAll();
 
         emulator.start();
         setAvr8jsEmulator(emulator);
@@ -2330,9 +2852,10 @@ export const SimulationCanvas = () => {
         emulator.loadHex(result.binaryData as HexSegment[]);
         setAvrEmulator(emulator);
 
-        // ✅ FIX #4: Reset LCD before starting emulator for clean state
-        console.log('📺 Resetting LCD engine...');
+        // ✅ FIX #4: Reset displays before starting emulator for clean state
+        console.log('📺 Resetting LCD and OLED engines...');
         getLCDEngine().resetAll();
+        getOLEDEngine().resetAll();
 
         toast.success('✅ Code compiled with custom emulator!');
         console.log('🎮 Setting isCodeUploaded to TRUE');
@@ -2703,6 +3226,58 @@ export const SimulationCanvas = () => {
       }
 
       // ═══════════════════════════════════════════════════════════════════
+      // 🖥️ OLED (I2C) DETECTION - Detect SSD1306/OLED usage in code
+      // ═══════════════════════════════════════════════════════════════════
+      const hasOLED = /(?:SSD1306|Adafruit_SSD1306|U8G2|u8g2|display\.begin|Wire\.begin|OLED|oled\.)/i.test(code) ||
+        /\.(?:clearDisplay|display|drawPixel|setTextSize|setCursor|print)\s*\(/i.test(code);
+
+      if (hasOLED) {
+        console.log('🖥️ OLED Display detected in code!');
+        console.log('   Initializing OLED engine...');
+
+        const oledEngine = getOLEDEngine();
+
+        // Find OLED instances in placed components
+        const oledComponents = placedComponents.filter(comp => comp.id.includes('oled'));
+
+        oledComponents.forEach(oled => {
+          // Register OLED with engine using A4 (SDA) and A5 (SCL) pin numbers
+          // Arduino Uno: A4 = pin 18 (SDA), A5 = pin 19 (SCL)
+          oledEngine.registerOLED(oled.instanceId, { sda: 18, scl: 19 }, 0x3C);
+          console.log(`🖥️ Registered OLED: ${oled.instanceId}`);
+        });
+
+        // If we have OLED components, parse display.print() from code and show it
+        if (oledComponents.length > 0) {
+          // Parse display.print() or display.println() calls from the code
+          const printRegex = /display\.(print|println)\s*\(\s*["']([^"']*?)["']\s*\)/gi;
+          const oledTexts: string[] = [];
+          let match;
+
+          while ((match = printRegex.exec(code)) !== null) {
+            const text = match[2];
+            if (text) {
+              oledTexts.push(text);
+              console.log(`🖥️ OLED: Found display.print("${text}")`);
+            }
+          }
+
+          setTimeout(() => {
+            if (oledTexts.length > 0) {
+              // Join all print statements with newlines and display
+              const displayText = oledTexts.join('\n');
+              console.log(`🖥️ OLED: Displaying parsed text: "${displayText}"`);
+              oledEngine.displayTextAll(displayText, 1);
+            } else {
+              // Fallback to test pattern if no print statements found
+              console.log('🖥️ OLED: No display.print() found, showing fallback');
+              oledEngine.showTestPatternAll();
+            }
+          }, 100);
+        }
+      }
+
+      // ═══════════════════════════════════════════════════════════════════
       // 📺 LCD TEXT PARSING (Static Code Analysis)
       // ═══════════════════════════════════════════════════════════════════
       // Parse lcd.print() and lcd.setCursor() to build display buffer
@@ -2957,6 +3532,7 @@ export const SimulationCanvas = () => {
         code: code,
         timestamp: Date.now(),
         hasLCD,
+        hasOLED, // Track OLED I2C display usage
         lcdText,  // ← LCD text content parsed from lcd.print()
         pinVariableMap,  // NEW: Variable-to-pin mapping for validation
         functionTypes: {
@@ -3060,8 +3636,46 @@ export const SimulationCanvas = () => {
     console.log(`🎯 Component type detected: ${componentType}`);
 
     // SMART PIN VALIDATION SYSTEM - Trace through circuit to find active pins
+    // ⚠️ IMPORTANT: Check for OLED/LCD FIRST because "oled" contains "led"!
+    // If we don't check displays first, OLED components will be incorrectly matched as LEDs
     if (
-      componentType.includes("led") ||
+      componentType.includes("lcd") ||
+      componentType.includes("oled") ||
+      componentType.includes("display")
+    ) {
+      // For OLED: check if properly wired OR if I2C/OLED code patterns were detected
+      if (componentType.includes("oled")) {
+        // Check if OLED has proper I2C wiring (VCC, GND, SDA, SCL)
+        const oledPins = componentWires.map(wire => {
+          const pinId = wire.startPinId.startsWith(componentInstanceId)
+            ? wire.endPinId : wire.startPinId;
+          const pinLabel = pinId.split("-").pop()?.toLowerCase() || "";
+          return pinLabel;
+        });
+
+        // Check for proper wiring: needs power (5v/3.3v/vcc), ground, and I2C pins (a4/sda, a5/scl)
+        const hasVcc = oledPins.some(p => p.includes("5v") || p.includes("3v") || p.includes("vcc"));
+        const hasGnd = oledPins.some(p => p.includes("gnd"));
+        const hasSDA = oledPins.some(p => p.includes("a4") || p.includes("sda"));
+        const hasSCL = oledPins.some(p => p.includes("a5") || p.includes("scl"));
+        const isProperlyWired = hasVcc && hasGnd && hasSDA && hasSCL;
+
+        const hasI2CCode = !!(compiledCode.hasOLED ||
+          (compiledCode.code && /(?:Wire\.begin|SSD1306|display\.begin)/i.test(compiledCode.code)));
+
+        // OLED is active if properly wired OR has I2C code
+        if (isProperlyWired || hasI2CCode) {
+          console.log(`✅ OLED ${component.name} is active - ${hasI2CCode ? 'I2C code detected' : 'properly wired (VCC/GND/SDA/SCL)'}`);
+          return true;
+        }
+      }
+      // For LCD: check if LCD code patterns were detected
+      return !!(compiledCode.hasLCD || compiledCode.serialOutput?.length);
+    }
+
+    // Now check for LED/buzzer/motor/servo (excluding oled/lcd/display which was checked above)
+    if (
+      (componentType.includes("led") && !componentType.includes("oled")) ||
       componentType.includes("buzzer") ||
       componentType.includes("motor") ||
       componentType.includes("servo")
@@ -3248,14 +3862,8 @@ export const SimulationCanvas = () => {
       }
     }
 
-    // Displays
-    if (
-      componentType.includes("lcd") ||
-      componentType.includes("oled") ||
-      componentType.includes("display")
-    ) {
-      return !!(compiledCode.hasLCD || compiledCode.serialOutput?.length);
-    }
+    // NOTE: Display check (LCD/OLED) is now done FIRST in this function (see above)
+    // to prevent "oled" from matching the "led" check.
 
     // Sensors - simple activity simulation
     if (

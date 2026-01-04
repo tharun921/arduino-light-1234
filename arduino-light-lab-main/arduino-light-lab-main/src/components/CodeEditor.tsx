@@ -120,24 +120,71 @@ void loop() {
 
       // Check for missing semicolons (basic check)
       const trimmedLine = line.trim();
+
+      // Skip lines that don't need semicolons:
+      // - Empty lines, comments, preprocessor directives
+      // - Lines ending with { } ; or , or )
+      // - Function/control flow declarations
+      // - Array element lines (contain only numbers, binary/hex literals, commas)
+      // - Lines that are part of array definitions
+      const isArrayElement = /^(0x[0-9a-fA-F]+|0b[01]+|\d+)\s*,?\s*$/.test(trimmedLine);
+      const endsWithArrayClose = trimmedLine.endsWith('};') || trimmedLine.endsWith('},');
+      const isArrayOrStructLine = trimmedLine.endsWith(',') || isArrayElement || endsWithArrayClose;
+      const isPROGMEM = line.includes('PROGMEM');
+      const isConstArray = line.includes('const ') && line.includes('[]');
+
+      // Check if line ends with function declaration pattern like "void loop()" or "int myFunc()"
+      const isFunctionDeclaration = /^\s*(void|int|float|char|bool|uint\d+_t|long|double|short|byte|String)\s+\w+\s*\([^)]*\)\s*$/.test(trimmedLine);
+
+      // Check if line is library type instantiation like "Adafruit_SSD1306 display(...)"
+      const isLibraryInstantiation = /^\s*\w+\s+\w+\s*\([^)]*\)\s*$/.test(trimmedLine) && trimmedLine.includes('(');
+
       if (
         trimmedLine &&
         !trimmedLine.startsWith("//") &&
         !trimmedLine.startsWith("/*") &&
+        !trimmedLine.startsWith("*") &&
         !trimmedLine.endsWith("{") &&
         !trimmedLine.endsWith("}") &&
         !trimmedLine.endsWith(";") &&
+        !trimmedLine.endsWith(",") &&
+        !trimmedLine.endsWith(")") &&
         !trimmedLine.includes("#") &&
+        !isArrayElement &&
+        !isArrayOrStructLine &&
+        !isPROGMEM &&
+        !isConstArray &&
+        !isFunctionDeclaration &&
+        !isLibraryInstantiation &&
         trimmedLine !== "" &&
         !trimmedLine.startsWith("void") &&
         !trimmedLine.startsWith("int") &&
         !trimmedLine.startsWith("float") &&
         !trimmedLine.startsWith("char") &&
         !trimmedLine.startsWith("bool") &&
+        !trimmedLine.startsWith("const") &&
+        !trimmedLine.startsWith("unsigned") &&
+        !trimmedLine.startsWith("String") &&
+        !trimmedLine.startsWith("long") &&
+        !trimmedLine.startsWith("short") &&
+        !trimmedLine.startsWith("byte") &&
+        !trimmedLine.startsWith("uint") &&
+        !trimmedLine.startsWith("Adafruit") &&
         !trimmedLine.startsWith("if") &&
         !trimmedLine.startsWith("for") &&
         !trimmedLine.startsWith("while") &&
-        !trimmedLine.startsWith("else")
+        !trimmedLine.startsWith("else") &&
+        !trimmedLine.startsWith("switch") &&
+        !trimmedLine.startsWith("case") &&
+        !trimmedLine.startsWith("default") &&
+        !trimmedLine.startsWith("return") &&
+        !trimmedLine.startsWith("break") &&
+        !trimmedLine.startsWith("continue") &&
+        !trimmedLine.startsWith("struct") &&
+        !trimmedLine.startsWith("class") &&
+        !trimmedLine.startsWith("public") &&
+        !trimmedLine.startsWith("private") &&
+        !trimmedLine.startsWith("protected")
       ) {
         errors.push({
           line: lineNum,

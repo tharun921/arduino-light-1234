@@ -1,8 +1,10 @@
 import React, { useState, useRef, useEffect } from "react";
 import { PlacedComponent } from "@/types/components";
 import LCDComponent from "./LCDComponent";
+import OLEDComponent from "./OLEDComponent";
 import { ServoComponent } from "./ServoComponent";
 import { getLCDEngine } from "@/simulation/LCDEngine";
+import { getOLEDEngine, OLEDDisplayBuffer } from "@/simulation/OLEDEngine";
 
 interface UniversalComponentProps {
   component: PlacedComponent;
@@ -89,7 +91,10 @@ export const UniversalComponent: React.FC<UniversalComponentProps> = ({
   };
 
   // Check if this is an LCD component
-  const isLCD = component.id.includes("lcd");
+  const isLCD = component.id.includes("lcd") && !component.id.includes("oled");
+
+  // Check if this is an OLED component
+  const isOLED = component.id.includes("oled");
 
   // Get LCD display buffer - PRIORITIZE ENGINE WHEN SIMULATING (for scrolling, etc.)
   // Static text from props is only used when NOT simulating
@@ -111,6 +116,33 @@ export const UniversalComponent: React.FC<UniversalComponentProps> = ({
       console.log(`📺 LCD text from component props (static) for ${component.instanceId}:`, lcdText);
     }
   }
+
+  // OLED display state
+  const [oledBuffer, setOledBuffer] = useState<OLEDDisplayBuffer | null>(null);
+
+  // Subscribe to OLED engine updates
+  useEffect(() => {
+    if (isOLED && isSimulating) {
+      const oledEngine = getOLEDEngine();
+
+      // Get initial buffer
+      const initialBuffer = oledEngine.getDisplayBuffer(component.instanceId);
+      if (initialBuffer) {
+        setOledBuffer(initialBuffer);
+      }
+
+      // Subscribe to updates
+      const unsubscribe = oledEngine.onUpdate((id, buffer) => {
+        if (id === component.instanceId) {
+          setOledBuffer(buffer);
+        }
+      });
+
+      return () => {
+        unsubscribe();
+      };
+    }
+  }, [isOLED, isSimulating, component.instanceId]);
 
   // Render component with image or placeholder
   return (
@@ -138,6 +170,26 @@ export const UniversalComponent: React.FC<UniversalComponentProps> = ({
           <svg width={component.width} height={component.height} viewBox="0 0 180 80">
             <LCDComponent x={0} y={0} rotation={0} lcdText={lcdText} />
           </svg>
+        ) : isOLED && isSimulating ? (
+          /* Render OLED with pixel display during simulation */
+          <svg width={component.width} height={component.height} viewBox="0 0 400 320" preserveAspectRatio="xMidYMid meet">
+            <OLEDComponent
+              x={0}
+              y={0}
+              rotation={0}
+              instanceId={component.instanceId}
+              width={400}
+              height={320}
+              isSimulating={isSimulating}
+            />
+          </svg>
+        ) : isOLED ? (
+          /* Show OLED image when not simulating */
+          <img
+            src={component.imagePath}
+            alt={component.name}
+            className="w-full h-full object-contain"
+          />
         ) : component.imagePath ? (
           <>
             {/* ✅ SERVO: Use dedicated component with rotating horn */}
